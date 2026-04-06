@@ -6109,13 +6109,16 @@ ggml_cgraph * llm_build_context::build_gemma4() {
 
         struct ggml_tensor * KQ_mask_l = is_sliding ? KQ_mask_swa : KQ_mask;
 
-        // norm
-        cur = llm_build_norm(ctx0, inpL, hparams, model.layers[il].attn_norm, NULL, LLM_NORM_RMS, cb, il);
-        cb(cur, "attn_norm", il);
+        auto freq_factors = !is_sliding ? model.layers[il].rope_freqs : nullptr;
 
-        // self-attention
-        {
-            auto freq_factors = !is_sliding ? model.layers[il].rope_freqs : nullptr;
+        ggml_tensor * attn_out;
+
+        if (hparams.has_kv(il) && model.layers[il].wv) {
+            attn_out = build_std_attention(gf, model.layers[il].attn_norm, inpL, inp_pos, il == n_layer - 1 ? inp_out_ids : nullptr, freq_factors,
+                    KQ_mask_l, nullptr, nullptr, hparams.f_attention_scale, 0.0f, n_swa, il, true, false, true, false, false, model.layers[il].attn_post_norm);
+        } else {
+            cur = llm_build_norm(ctx0, inpL, hparams, model.layers[il].attn_norm, NULL, LLM_NORM_RMS, cb, il);
+            cb(cur, "attn_norm", il);
 
             ggml_tensor *Qcur, *Kcur = nullptr, *Vcur = nullptr;
             Qcur = llm_build_lora_mm(lctx, ctx0, model.layers[il].wq, cur);
@@ -6151,19 +6154,19 @@ ggml_cgraph * llm_build_context::build_gemma4() {
             cur = llm_build_kv(ctx0, lctx, kv_self, gf, model.layers[il].wo, model.layers[il].bo,
                 Kcur, Vcur, Qcur, KQ_mask_l, n_tokens, kv_head, n_kv, hparams.f_attention_scale, cb, il, nullptr, n_swa);
 
+
+            if (il == n_layer - 1 && inp_out_ids) {
+                // skip computing output for unused tokens
+                cur  = ggml_get_rows(ctx0,  cur, inp_out_ids);
+                inpL = ggml_get_rows(ctx0, inpL, inp_out_ids);
+            }
+
+            cur = llm_build_norm(ctx0, cur, hparams, model.layers[il].attn_post_norm, NULL, LLM_NORM_RMS, cb, il);
+            cb(cur, "attn_post_norm", il);
+
+            attn_out = ggml_add(ctx0, cur, inpL);
+            cb(attn_out, "attn_out", il);
         }
-
-        if (il == n_layer - 1 && inp_out_ids) {
-            // skip computing output for unused tokens
-            cur  = ggml_get_rows(ctx0,  cur, inp_out_ids);
-            inpL = ggml_get_rows(ctx0, inpL, inp_out_ids);
-        }
-
-        cur = llm_build_norm(ctx0, cur, hparams, model.layers[il].attn_post_norm, NULL, LLM_NORM_RMS, cb, il);
-        cb(cur, "attn_post_norm", il);
-
-        auto attn_out = ggml_add(ctx0, cur, inpL);
-        cb(attn_out, "attn_out", il);
 
         if (model.layers[il].ffn_gate_inp) {
 
@@ -10248,7 +10251,8 @@ ggml_cgraph * llm_build_context::llama_build_graph(
 ggml_tensor * llm_build_context::build_std_attention(ggml_cgraph * gf, ggml_tensor * the_attn_norm,
         ggml_tensor * input, ggml_tensor * inp_pos, ggml_tensor * inp_out_ids, ggml_tensor * rope_factors_in,
         ggml_tensor * KQ_mask, ggml_tensor * sinks, ggml_tensor * inp_attn_scale, float KQ_scale, float f_attn_scale,
-        int n_swa, int il, bool do_rope, bool add_graph_split, bool add_input, bool is_norm, bool is_multi) {
+        int n_swa, int il, bool do_rope, bool add_graph_split, bool add_input, bool is_norm, bool is_multi,
+        ggml_tensor * post_norm) {
 
     float freq_base_l  = n_swa > 0 ? hparams.rope_freq_base_train_swa : cparams.rope_freq_base;
     float freq_scale_l = n_swa > 0 ? hparams.rope_freq_scale_train_swa : hparams.rope_freq_scale_train;
@@ -10541,6 +10545,10 @@ ggml_tensor * llm_build_context::build_std_attention(ggml_cgraph * gf, ggml_tens
                 model.layers[il].wq,   model.layers[il].bq, model.layers[il].wk, model.layers[il].bk, model.layers[il].wv, model.layers[il].bv,
                 model.layers[il].attn_q_norm, model.layers[il].attn_k_norm, f_attn_scale, il);
         Qcur = Q; Kcur = K; Vcur = V;
+        if (model.arch == LLM_ARCH_GEMMA4) {
+            Vcur = ggml_reshape_3d(ctx0, Vcur, model.hparams.n_embd_head_v(il), model.hparams.n_head_kv(il), n_tokens);
+            Vcur = ggml_rms_norm(ctx0, Vcur, model.hparams.f_norm_rms_eps);
+        }
     }
 
     if (do_rope) {
@@ -10618,6 +10626,11 @@ ggml_tensor * llm_build_context::build_std_attention(ggml_cgraph * gf, ggml_tens
             input = ggml_get_rows(ctx0, input, inp_out_ids);
             cb(input, "sainp_get_rows", il);
         }
+    }
+
+    if (post_norm) {
+        cur = llm_build_norm(ctx0, cur, hparams, post_norm, NULL, LLM_NORM_RMS, cb, il);
+        cb(cur, "sa_normed", il);
     }
 
     if (add_input) {

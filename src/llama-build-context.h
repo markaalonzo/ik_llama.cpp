@@ -440,7 +440,7 @@ llm_expert_gating_func_type   gating_op,
             ggml_tensor * inp_pos, ggml_tensor * inp_out_ids, ggml_tensor * rope_factors,
             ggml_tensor * KQ_mask, ggml_tensor * sinks, ggml_tensor * inp_attn_scale, float KQ_scale, float f_attn_scale,
             int n_swa, int il, bool do_rope = true, bool add_graph_split = false, bool add_input = false, bool is_norm = false,
-            bool is_multi = false);
+            bool is_multi = false, ggml_tensor * post_norm = nullptr);
 
     static uint32_t llama_kv_qnext_state_slots(const llama_kv_cache & kv_self);
 
