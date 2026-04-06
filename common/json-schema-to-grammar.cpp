@@ -678,6 +678,11 @@ private:
             const auto &prop_schema = kv.second;
 
             std::string prop_rule_name = visit(prop_schema, name + (name.empty() ? "" : "-") + prop_name);
+            if (prop_rule_name.empty()) {
+                // Property schema matched nothing (e.g., {"not":{}}).  Skip entirely.
+                // Also defends against any visit() error that returns "".
+                continue;
+            }
             prop_kv_rule_names[prop_name] = _add_rule(
                 name + (name.empty() ? "" : "-") + prop_name + "-kv",
                 format_literal(json(prop_name).dump()) + " space \":\" space " + prop_rule_name
@@ -1007,6 +1012,21 @@ public:
             _build_min_max_int(min_value, max_value, out);
             out << ") space";
             return _add_rule(rule_name, out.str());
+        } else if (schema.contains("not") && schema["not"].empty()) {
+            // {"not":{}} matches nothing â impossible constraint.
+            // Returns empty string as sentinel; _build_object_rule skips properties with empty rules.
+            return "";
+        } else if (!schema.contains("type") &&
+                   !schema.contains("anyOf") &&
+                   !schema.contains("oneOf") &&
+                   !schema.contains("allOf") &&
+                   !schema.contains("$ref") &&
+                   !schema.contains("not") &&
+                   !schema.contains("enum") &&
+                   !schema.contains("const")) {
+            // No type-constraining keywords â unconstrained schema (any JSON value).
+            // Valid per JSON Schema drafts 4-2020-12. Common: pydantic Any, serde_json::Value.
+            return _add_primitive("value", PRIMITIVE_RULES.at("value"));
         } else if (schema.empty() || schema_type == "object") {
             return _add_rule(rule_name, _add_primitive("object", PRIMITIVE_RULES.at("object")));
         } else {
