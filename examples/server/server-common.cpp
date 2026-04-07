@@ -789,6 +789,13 @@ json oaicompat_chat_params_parse(
         inputs.reasoning_format = common_reasoning_format_from_name(body.at("reasoning_format").get<std::string>());
     }
     inputs.enable_thinking = opt.enable_thinking;
+    // Allow per-request override of enable_thinking from the request body.
+    // Clients can send "enable_thinking": false to disable thinking for
+    // grammar-constrained requests where thinking output goes to
+    // reasoning_content instead of content (ik_llama.cpp #20345).
+    if (body.contains("enable_thinking")) {
+        inputs.enable_thinking = body.at("enable_thinking").get<bool>();
+    }
     if (!inputs.tools.empty() && inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_NONE) {
         if (body.contains("grammar")) {
             throw std::runtime_error("Cannot use custom grammar constraints with tools.");
