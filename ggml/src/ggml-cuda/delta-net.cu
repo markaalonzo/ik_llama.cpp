@@ -141,7 +141,10 @@ __global__ void delta_net_recurrent_f32(
             sum1 += all_sum1[i*WARP_SIZE_S + row];
             sum2 += all_sum2[i*WARP_SIZE_S + row];
         }
-        // To be honest, I don't understand why we need this sync. But without it I observe results varying from run to run
+        // Barrier: shared memory fence ensures all_sum1/all_sum2 reads above complete
+        // before the next iteration overwrites them, and ensures sK visibility for
+        // the state update below. Without this fence, hardware/compiler reordering
+        // causes non-deterministic reads from shared memory.
         __syncthreads();
 
         //float sv_new = beta_val * (v_ptr[t * qkv_stride_token + row_out] - sum1 * decay);
@@ -157,6 +160,7 @@ __global__ void delta_net_recurrent_f32(
             state_local[i] = new_state_val;
         }
 
+        __syncthreads();  // Barrier: sK reads in state update must complete before next iteration overwrites sK
     }
     __syncthreads();
     // Copy the final state to its destination
