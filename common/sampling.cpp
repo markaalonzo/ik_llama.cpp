@@ -143,6 +143,12 @@ static void llama_grammar_reset(common_sampler * ctx) {
         ctx->grammar->lazy, trigger_patterns_c.data(), trigger_patterns_c.size(),
         ctx->grammar->trigger_tokens.data(), ctx->grammar->trigger_tokens.size());
 
+    if (!grammar_new) {
+        // Re-parse failed — keep existing grammar rather than silently
+        // dropping constraints.
+        LOG_WRN("grammar reset: re-parse failed, keeping existing grammar\n");
+        return;
+    }
     llama_grammar_free_impl(ctx->grammar);
     ctx->grammar = grammar_new;
 }

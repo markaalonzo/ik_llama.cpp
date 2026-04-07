@@ -1309,6 +1309,10 @@ static void llama_sampler_grammar_reset(struct llama_sampler* smpl) {
         ctx->grammar->lazy, trigger_patterns_c.data(), trigger_patterns_c.size(),
         ctx->grammar->trigger_tokens.data(), ctx->grammar->trigger_tokens.size());
 
+    if (!grammar_new) {
+        LLAMA_LOG_WARN("grammar sampler reset: re-parse failed, keeping existing grammar\n");
+        return;
+    }
     llama_grammar_free_impl(ctx->grammar);
     ctx->grammar = grammar_new;
 }
