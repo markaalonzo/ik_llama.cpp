@@ -74,6 +74,13 @@ struct common_sampler * common_sampler_init(const struct llama_model * model, co
                 trigger_tokens.data(), trigger_tokens.size())
             : llama_sampler_init_grammar(vocab, params.grammar.c_str(), "root");
 
+        if (!grmr && !params.grammar.empty()) {
+            // Grammar string was provided but failed to parse -- fail closed
+            // instead of silently dropping constraints (llama.cpp #19051).
+            delete result;
+            return nullptr;
+        }
+
         result->prev.resize(params.n_prev);
         result->n_valid = 0;
 	    result->grammar_str = params.grammar;
