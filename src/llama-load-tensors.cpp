@@ -4052,6 +4052,26 @@ bool create_tensors_helper::create_tensors() {
         use_mmap_buffer &= !has_buft_overrides;
     }
 
+    if (model.arch == LLM_ARCH_GEMMA4 && (model.split_mode == LLAMA_SPLIT_MODE_GRAPH || model.split_mode == LLAMA_SPLIT_MODE_ATTN)) {
+        bool supported = true;
+        if (model.tok_embd_per_layer) {
+            supported = false;
+        }
+        for (auto & l : model.layers) {
+            if (l.ffn_gate_inp) {
+                supported = false;
+                break;
+            }
+        }
+        if (!supported) {
+            LLAMA_LOG_WARN("\n=========================================================\n");
+            LLAMA_LOG_WARN("Split mode 'graph' is not supported for this Gemma4 variant\n");
+            LLAMA_LOG_WARN("  => changing split mode to 'layer'\n");
+            LLAMA_LOG_WARN("===========================================================\n\n");
+            model.split_mode = LLAMA_SPLIT_MODE_LAYER;
+        }
+    }
+
     if (model.split_mode == LLAMA_SPLIT_MODE_GRAPH || model.split_mode == LLAMA_SPLIT_MODE_ATTN) {
         const int n_layer = model.mtp ? model.layers.size()
                                   : model.layers.size() - model.hparams.nextn_predict_layers;
@@ -4112,6 +4132,9 @@ bool create_tensors_helper::create_tensors() {
             if (layer.attn_norm) {
                 auto split = create_split(ggml_nrows(layer.attn_norm), -1, cur_splits, mem_used);
                 prepare_split_tensors(-1, ctx_split, layer.attn_norm, layer.split_attn_norm, split, mem_used);
+                if (model.arch == LLM_ARCH_GEMMA4 && layer.attn_post_norm) {
+                    prepare_split_tensors(-1, ctx_split, layer.attn_post_norm, layer.split_attn_post_norm, split, mem_used);
+                }
             }
             if (layer.rope_freqs) {
                 auto split = create_split(ggml_nrows(layer.rope_freqs), -1, cur_splits, mem_used);
@@ -4120,7 +4143,7 @@ bool create_tensors_helper::create_tensors() {
             if (hparams.is_recurrent(il)) {
                 split_recurrent_tensors(hparams, layer, cur_splits, mem_used, ctx_split, il); //, model.arch == LLM_ARCH_QWEN3NEXT ? 0 : 1);
             }
-            else if (layer.wo && layer.wq && layer.wk && layer.wv) {
+            else if (layer.wo && layer.wq && layer.wk && (layer.wv || model.arch == LLM_ARCH_GEMMA4)) {
                 auto granularity_kq = hparams.n_embd_head_k(il) * gqa_ratio;
                 int wq_ne1 = layer.wq->ne[1];
                 if (model.arch == LLM_ARCH_QWEN3NEXT || model.arch == LLM_ARCH_QWEN35MOE || model.arch == LLM_ARCH_QWEN35) {
@@ -4227,9 +4250,11 @@ bool create_tensors_helper::create_tensors() {
                         }
                     }
                 }
-                prepare_split_tensors(1, ctx_split, layer.wv, layer.split_wv, split_vo, mem_used);
-                if (layer.bv) {
-                    prepare_split_tensors(0, ctx_split, layer.bv, layer.split_bv, split_vo, mem_used);
+                if (layer.wv) {
+                    prepare_split_tensors(1, ctx_split, layer.wv, layer.split_wv, split_vo, mem_used);
+                    if (layer.bv) {
+                        prepare_split_tensors(0, ctx_split, layer.bv, layer.split_bv, split_vo, mem_used);
+                    }
                 }
             }
 
@@ -4237,6 +4262,12 @@ bool create_tensors_helper::create_tensors() {
                 if (auto it = split_tensors.find(layer.ffn_norm); it != split_tensors.end()) {
                     auto split = create_split(ggml_nrows(layer.ffn_norm), -1, cur_splits, mem_used);
                     prepare_split_tensors(-1, ctx_split, layer.ffn_norm, layer.split_ffn_norm, split, mem_used);
+                }
+            }
+            if (layer.ffn_post_norm) {
+                if (auto it = split_tensors.find(layer.ffn_post_norm); it != split_tensors.end()) {
+                    auto split = create_split(ggml_nrows(layer.ffn_post_norm), -1, cur_splits, mem_used);
+                    prepare_split_tensors(-1, ctx_split, layer.ffn_post_norm, layer.split_ffn_post_norm, split, mem_used);
                 }
             }
 

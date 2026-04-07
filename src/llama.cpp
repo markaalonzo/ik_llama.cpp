@@ -918,6 +918,9 @@ static bool llama_kv_cache_init(
             bool split_cache_i = split_cache;
             auto K = model.layers[i].wk;
             auto V = model.layers[i].wv;
+            if (!V && model.arch == LLM_ARCH_GEMMA4) {
+                V = K;
+            }
             if (split_cache && (!K || !V || !K->extra || !V->extra)) {
                 ctx = offload ? ctx_map.at(model.buft_layer[i].buft) : cache.ctxs.front();
                 split_cache_i = false;
@@ -2000,6 +2003,7 @@ static bool is_model_split_supported(const llama_model & model) {
         //LLM_ARCH_QWEN3NEXT,
         LLM_ARCH_QWEN35,
         LLM_ARCH_QWEN35MOE,
+        LLM_ARCH_GEMMA4,
     };
     auto it =  k_supported.find(model.arch);
     return it != k_supported.end();

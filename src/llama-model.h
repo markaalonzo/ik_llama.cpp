@@ -198,6 +198,7 @@ struct llama_layer {
     struct ggml_tensor * bkv  = nullptr;
 
     llama_split_tensor split_attn_norm;
+    llama_split_tensor split_attn_post_norm;
     llama_split_tensor split_attn_sinks;
     llama_split_tensor split_wq;
     llama_split_tensor split_wk;
@@ -257,6 +258,7 @@ struct llama_layer {
     llama_split_tensor split_ffn_down;
     llama_split_tensor split_ffn_norm;
     llama_split_tensor split_ffn_up_gate;
+    llama_split_tensor split_ffn_post_norm;
 
     // ff MoE
     struct ggml_tensor * ffn_gate_inp = nullptr;
