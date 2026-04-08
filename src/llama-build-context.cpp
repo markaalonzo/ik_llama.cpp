@@ -6106,6 +6106,9 @@ static ggml_cgraph * build_gemma4_moe_graph_paralle(llm_build_context & llm, lla
                 cur_moe = do_split_norm(ctx0, cur_moe, model.layers[il-1].ffn_post_norm_2, hparams, cb, id, il_cb, false);
                 cb(cur, "ffn_moe_post_norm", il_cb);
                 cur = ggml_add(ctx0, cur, cur_moe);
+                cb(cur, "ffn_combined", il_cb);
+                cur = do_split_norm(ctx0, cur, model.layers[il-1].ffn_post_norm, hparams, cb, id, il_cb, false);
+                cb(cur, "ffn_normed", il_cb);
                 auto add = ffn_inp[id];
                 if (!add) {
                     for (int j = 0; j < n_device; ++j) {
@@ -6339,11 +6342,17 @@ static ggml_cgraph * build_gemma4_moe_graph_paralle(llm_build_context & llm, lla
 
     auto post_norm_1 = (const ggml_split_tensor_t *)model.layers[hparams.n_layer-1].ffn_post_norm_1->extra;
     auto post_norm_2 = (const ggml_split_tensor_t *)model.layers[hparams.n_layer-1].ffn_post_norm_2->extra;
+    auto post_norm   = (const ggml_split_tensor_t *)model.layers[hparams.n_layer-1].ffn_post_norm->extra;
     cur = llm.llm_build_norm(ctx0, cur, hparams, post_norm_1->splits[idx], NULL, LLM_NORM_RMS, cb, -1);
+    cur->op_params[GGML_MAX_OP_PARAMS / sizeof(int32_t) - 1] = 0xff;
+    ggml_build_forward_expand(gf, cur);
     cur_moe = llm.llm_build_norm(ctx0, cur_moe, hparams, post_norm_2->splits[idx], NULL, LLM_NORM_RMS, cb, -1);
     cb(cur, "ffn_post", hparams.n_layer-1);
     cb(cur_moe, "ffn_post_moe", hparams.n_layer-1);
     cur = ggml_add(ctx0, cur, cur_moe);
+    cb(cur, "ffn_combined", hparams.n_layer-1);
+    cur = llm.llm_build_norm(ctx0, cur, hparams, post_norm->splits[idx], NULL, LLM_NORM_RMS, cb, -1);
+    cb(cur, "ffn_normed", hparams.n_layer-1);
     auto add = ffn_inp[idx];
     if (!add) {
         for (int j = 0; j < n_device; ++j) {
@@ -6362,6 +6371,7 @@ static ggml_cgraph * build_gemma4_moe_graph_paralle(llm_build_context & llm, lla
     }
 
     cur = build_output(lctx, ctx0, cur, model.output, model.output_norm, cb);
+    cb(cur, "almost_result", -1);
     if (hparams.f_final_logit_softcapping > 0) {
         cur = ggml_softcap(ctx0, cur, 1.0f / hparams.f_final_logit_softcapping, hparams.f_final_logit_softcapping);
     }
