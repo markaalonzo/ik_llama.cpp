@@ -554,7 +554,7 @@ struct clip_graph {
     const int d_head;
     const int n_layer;
     const float eps;
-    const float kq_scale;
+    float kq_scale;
 
     ggml_context_ptr ctx0_ptr;
     ggml_context * ctx0;
@@ -1240,7 +1240,7 @@ struct clip_graph {
             return cur;
         };
 
-        float kq_scale = 1.0f;
+        kq_scale = 1.0f;
         ggml_tensor * cur = build_vit(
                 inp, n_patches,
                 NORM_TYPE_RMS,
@@ -3199,7 +3199,7 @@ struct clip_model_loader {
                     {
                         hparams.rope_theta = 100.0f;
                         hparams.n_merge = 3; // pooling_kernel_size
-                        //hparams.image_resize_algo = RESIZE_ALGO_BILINEAR;
+                        //hparams.image_resize_algo = img_tool::RESIZE_ALGO_BILINEAR;
                         get_u32(KEY_PROJ_SCALE_FACTOR, hparams.n_merge, false);
                         // @ngxson : the model performs quite poor with small images, we need to bump minimum image tokens to 40 to avoid that
                         hparams.set_limit_image_tokens(252, 280);
@@ -4654,9 +4654,10 @@ bool clip_image_preprocess(struct clip_ctx * ctx, const clip_image_u8 * img, str
             {
                 GGML_ASSERT(params.image_min_pixels > 0 && params.image_max_pixels > 0);
                 clip_image_u8 resized;
+                const int cur_merge = params.n_merge == 0 ? 1 : params.n_merge;
                 const clip_image_size new_size = img_tool::calc_size_preserved_ratio(
                     original_size,
-                    params.patch_size * 2,
+                    params.patch_size * cur_merge,
                     params.image_min_pixels,
                     params.image_max_pixels);
                 img_tool::resize(*img, resized, new_size, img_tool::RESIZE_ALGO_BILINEAR, false);
