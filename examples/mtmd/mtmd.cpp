@@ -301,6 +301,12 @@ struct mtmd_context {
             img_end = "<|im_end|>";
 
         }
+        else if (proj == PROJECTOR_TYPE_GEMMA4V) {
+            // <|image> ... (image embeddings) ... <image|>
+            img_beg = "<|image>";
+            img_end = "<image|>";
+            //image_preproc = std::make_unique<mtmd_image_preprocessor_dyn_size>(ctx_v);
+        }
     }
 
     void init_audio() {
