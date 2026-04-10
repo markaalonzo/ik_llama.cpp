@@ -3397,6 +3397,12 @@ static ggml_type kv_cache_type_from_str(const std::string & s) {
     if (s == "q8_KV") {
         return GGML_TYPE_Q8_KV;
     }
+    if (s == "turbo3" || s == "turbo3_0") {
+        return GGML_TYPE_TURBO3_0;
+    }
+    if (s == "turbo4" || s == "turbo4_0") {
+        return GGML_TYPE_TURBO4_0;
+    }
 
     throw std::runtime_error("Invalid cache type: " + s);
 }

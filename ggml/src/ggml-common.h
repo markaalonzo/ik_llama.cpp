@@ -293,6 +293,31 @@ typedef struct {
 static_assert(sizeof(block_q8_2_x4) == 4*sizeof(block_q8_2), "wrong q8_2_x4 block size/padding");
 
 //
+// TurboQuant KV cache compression (arXiv 2504.19874)
+// Uses FWHT rotation + Lloyd-Max codebook quantization
+//
+
+// TURBO3_0: 3-bit PolarQuant (2-bit low + 1-bit sign)
+// Block size 32, rotation group 128 (head_dim). 3.5 bits/value = 4.6x compression vs fp16.
+#define QK_TURBO3 32
+#define QK_TURBO3_GROUP 128
+typedef struct {
+    ggml_half  norm;                    //  2 bytes: corrected L2 norm
+    uint8_t    qs[QK_TURBO3 / 4];      //  8 bytes: lower 2-bit indices (4 per byte)
+    uint8_t    signs[QK_TURBO3 / 8];   //  4 bytes: upper 1-bit of 3-bit index (8 per byte)
+} block_turbo3_0;                       // 14 bytes total
+static_assert(sizeof(block_turbo3_0) == sizeof(ggml_half) + QK_TURBO3/4 + QK_TURBO3/8, "wrong turbo3_0 block size/padding");
+
+// TURBO4_0: 4-bit PolarQuant (16-level Lloyd-Max codebook)
+// Block size 128 (= rotation group). 4.125 bits/value = 3.9x compression vs fp16.
+#define QK_TURBO4 128
+typedef struct {
+    ggml_half  norm;                    //  2 bytes: corrected L2 norm
+    uint8_t    qs[QK_TURBO4 / 2];      // 64 bytes: 4-bit indices (2 per byte, low nibble first)
+} block_turbo4_0;                       // 66 bytes total
+static_assert(sizeof(block_turbo4_0) == sizeof(ggml_half) + QK_TURBO4/2, "wrong turbo4_0 block size/padding");
+
+//
 // Super-block quantization structures
 //
 

@@ -9,6 +9,7 @@
 
 #include "ggml-impl.h"
 #include "ggml-quants.h"
+#include "ggml-turbo-quant.h"
 #include "ggml.h"
 #include "ggml-aarch64.h"
 #include "iqk/iqk_quantize.h"
@@ -1943,6 +1944,32 @@ static const ggml_type_traits_t type_traits[GGML_TYPE_COUNT] = {
         .from_float_ref           = NULL,
         .vec_dot                  = NULL,
         .vec_dot_type             = GGML_TYPE_Q8_0,
+        .nrows                    = 1,
+        .row_meta_size            = 0,
+    },
+    [GGML_TYPE_TURBO3_0] = {
+        .type_name                = "turbo3_0",
+        .blck_size                = QK_TURBO3,
+        .type_size                = sizeof(block_turbo3_0),
+        .is_quantized             = true,
+        .to_float                 = (ggml_to_float_t) dequantize_row_turbo3_0,
+        .from_float               = quantize_row_turbo3_0,
+        .from_float_ref           = (ggml_from_float_t) quantize_row_turbo3_0_ref,
+        .vec_dot                  = NULL,
+        .vec_dot_type             = GGML_TYPE_F32,
+        .nrows                    = 1,
+        .row_meta_size            = 0,
+    },
+    [GGML_TYPE_TURBO4_0] = {
+        .type_name                = "turbo4_0",
+        .blck_size                = QK_TURBO4,
+        .type_size                = sizeof(block_turbo4_0),
+        .is_quantized             = true,
+        .to_float                 = (ggml_to_float_t) dequantize_row_turbo4_0,
+        .from_float               = quantize_row_turbo4_0,
+        .from_float_ref           = (ggml_from_float_t) quantize_row_turbo4_0_ref,
+        .vec_dot                  = NULL,
+        .vec_dot_type             = GGML_TYPE_F32,
         .nrows                    = 1,
         .row_meta_size            = 0,
     },
@@ -4241,6 +4268,7 @@ static const char * GGML_OP_NAME[GGML_OP_COUNT] = {
     "MOE_FUSED_UP_GATE",
     "MUL_MULTI_ADD",
     "HADAMARD",
+    "TURBO_WHT",
 
     "SCALE",
     "SET",
@@ -6266,6 +6294,25 @@ struct ggml_tensor * ggml_hadamard(
     result->src[0] = a;
 
     result->op_params[0] = n;
+
+    return result;
+}
+
+struct ggml_tensor * ggml_turbo_wht(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * a,
+        int                   direction) {
+
+    GGML_ASSERT(a->type == GGML_TYPE_F32);
+    GGML_ASSERT(a->ne[0] % 128 == 0);
+    GGML_ASSERT(direction == 0 || direction == 1);
+
+    struct ggml_tensor * result = ggml_new_tensor(ctx, GGML_TYPE_F32, GGML_MAX_DIMS, a->ne);
+
+    result->op   = GGML_OP_TURBO_WHT;
+    result->src[0] = a;
+
+    result->op_params[0] = direction;
 
     return result;
 }
@@ -24148,6 +24195,10 @@ static int ggml_compute_forward(struct ggml_compute_params * params, struct ggml
             {
                 iqk_hadamard(tensor, params->ith, params->nth);
             } break;
+        case GGML_OP_TURBO_WHT:
+            {
+                ggml_compute_turbo_wht(tensor, params->ith, params->nth);
+            } break;
         case GGML_OP_ACC:
             {
                 ggml_compute_forward_acc(params, tensor);
@@ -26207,6 +26258,7 @@ static int ggml_get_n_tasks(struct ggml_tensor * node, int n_threads) {
         case GGML_OP_MULTI_ADD:
         case GGML_OP_MUL_MULTI_ADD:
         case GGML_OP_HADAMARD:
+        case GGML_OP_TURBO_WHT:
         case GGML_OP_REPEAT:
         case GGML_OP_SUB:
             {

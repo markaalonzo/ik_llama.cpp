@@ -484,6 +484,8 @@ extern "C" {
         GGML_TYPE_Q8_K_R16  = 397,
         GGML_TYPE_Q8_KV_R8  = 398,
         GGML_TYPE_Q8_K_R8   = 399,
+        GGML_TYPE_TURBO3_0  = 400,
+        GGML_TYPE_TURBO4_0  = 401,
         GGML_TYPE_COUNT,
     };
 
@@ -622,6 +624,7 @@ extern "C" {
         GGML_OP_MOE_FUSED_UP_GATE,
         GGML_OP_MUL_MULTI_ADD,
         GGML_OP_HADAMARD,
+        GGML_OP_TURBO_WHT,
 
         GGML_OP_SCALE,
         GGML_OP_SET,
@@ -1119,6 +1122,13 @@ extern "C" {
             struct ggml_context * ctx,
             struct ggml_tensor  * a,
             int                   n);
+
+    // TurboQuant FWHT: Fast Walsh-Hadamard Transform with sign-flip rotation
+    // direction: 0 = forward (for quantize), 1 = inverse (for dequantize)
+    GGML_API struct ggml_tensor * ggml_turbo_wht(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a,
+            int                   direction);
 
     // dst = a
     // view(dst, nb1, nb2, nb3, offset) += b
