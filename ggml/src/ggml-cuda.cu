@@ -53,6 +53,7 @@
 #include "ggml-cuda/argmax.cuh"
 #include "ggml-cuda/multiadd.cuh"
 #include "ggml-cuda/hadamard.cuh"
+#include "ggml-cuda/turbo-wht.cuh"
 #include "ggml-cuda/reduce.cuh"
 #include "ggml-cuda/tri.cuh"
 #include "ggml-cuda/delta-net.cuh"
@@ -3394,6 +3395,9 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
         case GGML_OP_HADAMARD:
             ggml_cuda_op_hadamard(ctx, dst);
             break;
+        case GGML_OP_TURBO_WHT:
+            ggml_cuda_op_turbo_wht(ctx, dst);
+            break;
         case GGML_OP_REPEAT:
             ggml_cuda_op_repeat(ctx, dst);
             break;
@@ -4621,6 +4625,8 @@ GGML_CALL static bool ggml_backend_cuda_supports_op(ggml_backend_t backend, cons
         case GGML_OP_HADAMARD:
             return (op->op_params[0] == 64 || op->op_params[0] == 128 || op->op_params[0] == 256 || op->op_params[0] == 512)
                 && op->ne[0] % op->op_params[0] == 0 && op->type == GGML_TYPE_F32 && op->src[0]->type == GGML_TYPE_F32;
+        case GGML_OP_TURBO_WHT:
+            return op->ne[0] % 128 == 0 && op->type == GGML_TYPE_F32 && op->src[0]->type == GGML_TYPE_F32;
         case GGML_OP_DUP:
         case GGML_OP_REPEAT:
         case GGML_OP_CONCAT:

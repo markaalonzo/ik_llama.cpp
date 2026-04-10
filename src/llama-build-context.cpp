@@ -1619,6 +1619,10 @@ static ggml_tensor * llm_build_kqv(
             cur = ggml_hadamard(ctx, cur, n_embd_head_v);
             cb(cur, "fa_h", il);
         }
+        if (kv_self.type_v == GGML_TYPE_TURBO3_0 || kv_self.type_v == GGML_TYPE_TURBO4_0) {
+            cur = ggml_turbo_wht(ctx, cur, 1);  // direction=1: inverse
+            cb(cur, "fa_turbo_wht_inv", il);
+        }
         cur = ggml_reshape_2d(ctx, cur, n_embd_head_v*n_head, n_tokens);
     } else {
 
@@ -1786,6 +1790,23 @@ ggml_tensor * llm_build_context::llm_build_kv(
     }
     if (cparams.v_cache_hadamard && v_cur) {
         v_cur = ggml_hadamard(ctx, v_cur, hparams.n_embd_head_v(il));
+    }
+
+    // TurboQuant: apply FWHT rotation when turbo KV cache types are active.
+    // Forward rotation (direction=0) on K/V before quantize-on-write.
+    // Q gets the same rotation so Q·K dot products are preserved.
+    const bool turbo_k = (kv_self.type_k == GGML_TYPE_TURBO3_0 || kv_self.type_k == GGML_TYPE_TURBO4_0);
+    const bool turbo_v = (kv_self.type_v == GGML_TYPE_TURBO3_0 || kv_self.type_v == GGML_TYPE_TURBO4_0);
+    if (turbo_k) {
+        q_cur = ggml_turbo_wht(ctx, q_cur, 0);
+        if (k_cur) {
+            k_cur = ggml_turbo_wht(ctx, k_cur, 0);
+            cb(k_cur, "Kcur_turbo_wht", il);
+        }
+        cb(q_cur, "Qcur_turbo_wht", il);
+    }
+    if (turbo_v && v_cur) {
+        v_cur = ggml_turbo_wht(ctx, v_cur, 0);
     }
 
     // these nodes are added to the graph together so that they are not reordered
@@ -6233,6 +6254,10 @@ static ggml_cgraph * build_gemma4_graph_parallel(llm_build_context & llm, llama_
             if (cparams.v_cache_hadamard) {
                 cur = ggml_hadamard(ctx0, cur, n_embd_head_v);
                 cb(cur, "fa_h", il_cb);
+            }
+            if (kv_self.type_v == GGML_TYPE_TURBO3_0 || kv_self.type_v == GGML_TYPE_TURBO4_0) {
+                cur = ggml_turbo_wht(ctx0, cur, 1);  // direction=1: inverse
+                cb(cur, "fa_turbo_wht_inv", il_cb);
             }
             cur = ggml_reshape_2d(ctx0, cur, wo->splits[id]->ne[0], n_tokens);
             if (il == hparams.n_layer-1 && inp_out_ids) {

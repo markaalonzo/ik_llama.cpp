@@ -657,6 +657,84 @@ struct HelperIQ4nl final : public BaseHelper {
 #endif
 };
 
+// TurboQuant helpers: dequantize turbo blocks to float, then load into SIMD.
+// Not SIMD-optimized yet — correct first, fast later.
+// Lloyd-Max codebooks (must match ggml-turbo-quant.c)
+static const float turbo_centroids_3bit[8] = {
+    -0.190685f, -0.117832f, -0.065717f, -0.021460f,
+     0.021460f,  0.065717f,  0.117832f,  0.190685f
+};
+static const float turbo_centroids_4bit[16] = {
+    -0.241556f, -0.182907f, -0.143047f, -0.111065f,
+    -0.083317f, -0.058069f, -0.034311f, -0.011353f,
+     0.011353f,  0.034311f,  0.058069f,  0.083317f,
+     0.111065f,  0.143047f,  0.182907f,  0.241556f,
+};
+
+struct HelperTurbo4 final : public BaseHelper {
+    using Base = BaseHelper;
+    constexpr static ggml_type type = GGML_TYPE_TURBO4_0;
+    using block_q8 = block_q8_0;
+    constexpr static int block_size_q = QK8_0;
+    HelperTurbo4(const char * data, int stride) : Base(data, stride) {}
+
+    // Dequantize turbo4 block (128 values) into float buffer
+    static inline void dequant_block(const block_turbo4_0 * blk, float * out) {
+        float norm = GGML_FP16_TO_FP32(blk->norm);
+        for (int j = 0; j < QK_TURBO4; j++) {
+            uint8_t idx = (j & 1) ? (blk->qs[j / 2] >> 4) : (blk->qs[j / 2] & 0xF);
+            out[j] = turbo_centroids_4bit[idx] * norm;
+        }
+    }
+
+    inline void load(int l1, int i, F16::Data& v1, F16::Data& v2) const {
+        int j = F16::block_size * i;
+        auto blk = (const block_turbo4_0 *)Base::lblock(l1) + j / QK_TURBO4;
+        int offset = j % QK_TURBO4;
+        float tmp[QK_TURBO4];
+        dequant_block(blk, tmp);
+        v1 = F16::load(tmp + offset);
+        v2 = F16::load(tmp + offset + F16::block_size);
+    }
+};
+
+struct HelperTurbo3 final : public BaseHelper {
+    using Base = BaseHelper;
+    constexpr static ggml_type type = GGML_TYPE_TURBO3_0;
+    using block_q8 = block_q8_0;
+    constexpr static int block_size_q = QK8_0;
+    HelperTurbo3(const char * data, int stride) : Base(data, stride) {}
+
+    // Dequantize turbo3 block (32 values) into float buffer
+    static inline void dequant_block(const block_turbo3_0 * blk, float * out) {
+        float norm = GGML_FP16_TO_FP32(blk->norm);
+        for (int j = 0; j < QK_TURBO3; j++) {
+            uint8_t low2 = (blk->qs[j / 4] >> ((j % 4) * 2)) & 0x3;
+            uint8_t hi1  = (blk->signs[j / 8] >> (j % 8)) & 0x1;
+            uint8_t idx  = low2 | (hi1 << 2);
+            out[j] = turbo_centroids_3bit[idx] * norm;
+        }
+    }
+
+    inline void load(int l1, int i, F16::Data& v1, F16::Data& v2) const {
+        int j = F16::block_size * i;
+        auto blk = (const block_turbo3_0 *)Base::lblock(l1) + j / QK_TURBO3;
+        int offset = j % QK_TURBO3;
+        float tmp[QK_TURBO3];
+        dequant_block(blk, tmp);
+        v1 = F16::load(tmp + offset);
+        // For QK_TURBO3=32 with block_size=16, second half is still in same block
+        if (offset + F16::block_size < QK_TURBO3) {
+            v2 = F16::load(tmp + offset + F16::block_size);
+        } else {
+            // Crosses into next block
+            float tmp2[QK_TURBO3];
+            dequant_block(blk + 1, tmp2);
+            v2 = F16::load(tmp2);
+        }
+    }
+};
+
 struct HelperQ60 final : public BaseHelper {
     constexpr static ggml_type type = GGML_TYPE_Q6_0;
 #ifdef __aarch64__
@@ -2177,6 +2255,14 @@ inline bool iqk_flash_helper_T(KHelper& kh, ggml_type type_v,
             iqk_flash_helper<Dk, Dv, k_step>(kh, vh, nq1, nk1, stride_q, stride_m, stride_qkv, q, mask, scale, softcap, qkv, sinkf, M, S);
         } break;
 #endif
+        case GGML_TYPE_TURBO3_0: {
+            HelperTurbo3 vh(v, stride_v);
+            iqk_flash_helper<Dk, Dv, k_step>(kh, vh, nq1, nk1, stride_q, stride_m, stride_qkv, q, mask, scale, softcap, qkv, sinkf, M, S);
+        } break;
+        case GGML_TYPE_TURBO4_0: {
+            HelperTurbo4 vh(v, stride_v);
+            iqk_flash_helper<Dk, Dv, k_step>(kh, vh, nq1, nk1, stride_q, stride_m, stride_qkv, q, mask, scale, softcap, qkv, sinkf, M, S);
+        } break;
         default: return false;
     }
     return true;
@@ -2224,6 +2310,14 @@ inline bool iqk_flash_helper_T(ggml_type type_k, ggml_type type_v,
             result = iqk_flash_helper_T<Dk, Dv, k_step>(kh, type_v, nq1, nk1, stride_q, stride_v, stride_m, stride_qkv, q, v, mask, scale, softcap, qkv, sinkf, M, S);
         } break;
 #endif
+        case GGML_TYPE_TURBO3_0: {
+            HelperTurbo3 kh(k, stride_k);
+            result = iqk_flash_helper_T<Dk, Dv, k_step>(kh, type_v, nq1, nk1, stride_q, stride_v, stride_m, stride_qkv, q, v, mask, scale, softcap, qkv, sinkf, M, S);
+        } break;
+        case GGML_TYPE_TURBO4_0: {
+            HelperTurbo4 kh(k, stride_k);
+            result = iqk_flash_helper_T<Dk, Dv, k_step>(kh, type_v, nq1, nk1, stride_q, stride_v, stride_m, stride_qkv, q, v, mask, scale, softcap, qkv, sinkf, M, S);
+        } break;
         default: break;
     }
 
