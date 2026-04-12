@@ -954,7 +954,7 @@ void ggml_cuda_op_fused_rms_rms_norm([[maybe_unused]] ggml_backend_cuda_context 
 
 template <int block_size, typename src_t>
 static __global__ void fused_rms_rms_add_f32(int ncols, int nrows, float * dst,
-        const src_t * x1, const float * c1, const src_t * x2, const float * c2, float eps1, float eps2) {
+        const src_t * x1, const float * c1, const src_t * x2, const float * c2, float eps) {
     const int row = blockIdx.x*blockDim.y + threadIdx.y;
     const int tid = threadIdx.x;
 
@@ -989,8 +989,8 @@ static __global__ void fused_rms_rms_add_f32(int ncols, int nrows, float * dst,
 
     const float mean1 = tmp1 / ncols;
     const float mean2 = tmp2 / ncols;
-    const float scale1 = rsqrtf(mean1 + eps1);
-    const float scale2 = rsqrtf(mean2 + eps2);
+    const float scale1 = rsqrtf(mean1 + eps);
+    const float scale2 = rsqrtf(mean2 + eps);
 
     dst += row*ncols;
 
@@ -1002,56 +1002,51 @@ static __global__ void fused_rms_rms_add_f32(int ncols, int nrows, float * dst,
 template <typename src_t>
 static void fused_rms_rms_add_f32_cuda(int ncols, int nrows, float * dst,
         const src_t * x1, const float * c1, const src_t * x2, const float * c2,
-        float eps1, float eps2, cudaStream_t stream) {
+        float eps, cudaStream_t stream) {
     if (ncols < 1024) {
         const dim3 block_dims(256, 1, 1);
-        fused_rms_rms_add_f32<256><<<nrows, block_dims, 0, stream>>>(ncols, nrows, dst, x1, c1, x2, c2, eps1, eps2);
+        fused_rms_rms_add_f32<256><<<nrows, block_dims, 0, stream>>>(ncols, nrows, dst, x1, c1, x2, c2, eps);
     } else {
         const dim3 block_dims(1024, 1, 1);
-        fused_rms_rms_add_f32<1024><<<nrows, block_dims, 0, stream>>>(ncols, nrows, dst, x1, c1, x2, c2, eps1, eps2);
+        fused_rms_rms_add_f32<1024><<<nrows, block_dims, 0, stream>>>(ncols, nrows, dst, x1, c1, x2, c2, eps);
     }
 }
 
 void ggml_cuda_op_fused_rms_rms_add(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
-    auto rms1 = dst->src[0];
-    auto rms2 = dst->src[1];
-    GGML_ASSERT(ggml_are_same_shape(rms1, rms2));
-    GGML_ASSERT(ggml_are_same_shape(rms1, dst));
-    GGML_ASSERT(ggml_is_contiguous(rms1));
-    GGML_ASSERT(ggml_is_contiguous(rms2));
+    GGML_ASSERT(ggml_are_same_shape(dst->src[0], dst->src[2]));
+    GGML_ASSERT(ggml_are_same_shape(dst->src[0], dst));
+    GGML_ASSERT(ggml_is_contiguous(dst->src[0]));
+    GGML_ASSERT(ggml_is_contiguous(dst->src[2]));
     GGML_ASSERT(ggml_is_contiguous(dst));
-    GGML_ASSERT(ggml_are_same_shape(rms1->src[0], rms1) && ggml_is_contiguous(rms1->src[0]));
-    GGML_ASSERT(ggml_are_same_shape(rms2->src[0], rms1) && ggml_is_contiguous(rms2->src[0]));
-    GGML_ASSERT(ggml_nrows(rms1->src[1]) == 1 && rms1->src[1]->ne[0] == rms1->src[0]->ne[0]);
-    GGML_ASSERT(ggml_nrows(rms2->src[1]) == 1 && rms2->src[1]->ne[0] == rms2->src[0]->ne[0]);
-    GGML_ASSERT(rms1->src[0]->type == rms2->src[0]->type);
-    GGML_ASSERT(rms1->src[1]->type == GGML_TYPE_F32 && rms2->src[1]->type == GGML_TYPE_F32);
+    GGML_ASSERT(ggml_nrows(dst->src[1]) == 1 && dst->src[1]->ne[0] == dst->src[0]->ne[0]);
+    GGML_ASSERT(ggml_nrows(dst->src[3]) == 1 && dst->src[3]->ne[0] == dst->src[2]->ne[0]);
+    GGML_ASSERT(dst->src[0]->type == dst->src[2]->type);
+    GGML_ASSERT(dst->src[1]->type == GGML_TYPE_F32 && dst->src[3]->type == GGML_TYPE_F32);
     GGML_ASSERT(dst->type == GGML_TYPE_F32);
 
-    float eps1, eps2;
-    memcpy(&eps1, rms1->op_params, sizeof(float));
-    memcpy(&eps2, rms2->op_params, sizeof(float));
+    float eps;
+    memcpy(&eps, dst->op_params, sizeof(float));
 
     int nrows = ggml_nrows(dst);
     int ncols = dst->ne[0];
 
-    if (rms1->src[0]->type == GGML_TYPE_F32) {
+    if (dst->src[0]->type == GGML_TYPE_F32) {
         fused_rms_rms_add_f32_cuda(ncols, nrows, (float *)dst->data,
-                (const float *)rms1->src[0]->data, (const float *)rms1->src[1]->data,
-                (const float *)rms2->src[0]->data, (const float *)rms2->src[1]->data,
-                eps1, eps2, ctx.stream());
+                (const float *)dst->src[0]->data, (const float *)dst->src[1]->data,
+                (const float *)dst->src[2]->data, (const float *)dst->src[3]->data,
+                eps, ctx.stream());
     }
-    else if (rms1->src[0]->type == GGML_TYPE_F16) {
+    else if (dst->src[0]->type == GGML_TYPE_F16) {
         fused_rms_rms_add_f32_cuda(ncols, nrows, (float *)dst->data,
-                (const half *)rms1->src[0]->data, (const float *)rms1->src[1]->data,
-                (const half *)rms2->src[0]->data, (const float *)rms2->src[1]->data,
-                eps1, eps2, ctx.stream());
+                (const half *)dst->src[0]->data, (const float *)dst->src[1]->data,
+                (const half *)dst->src[2]->data, (const float *)dst->src[3]->data,
+                eps, ctx.stream());
     }
-    else if (rms1->src[0]->type == GGML_TYPE_BF16) {
+    else if (dst->src[0]->type == GGML_TYPE_BF16) {
         fused_rms_rms_add_f32_cuda(ncols, nrows, (float *)dst->data,
-                (const nv_bfloat16 *)rms1->src[0]->data, (const float *)rms1->src[1]->data,
-                (const nv_bfloat16 *)rms2->src[0]->data, (const float *)rms2->src[1]->data,
-                eps1, eps2, ctx.stream());
+                (const nv_bfloat16 *)dst->src[0]->data, (const float *)dst->src[1]->data,
+                (const nv_bfloat16 *)dst->src[2]->data, (const float *)dst->src[2]->data,
+                eps, ctx.stream());
     }
     else {
         GGML_ABORT("Not implemented");

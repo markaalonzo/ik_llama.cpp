@@ -3656,18 +3656,6 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
                 i += 4;
             }
             else if (fusion && i + 2 < cgraph->n_nodes &&
-                cgraph->nodes[i+1]->op == GGML_OP_FUSED_RMS_NORM &&
-                cgraph->nodes[i+2]->op == GGML_OP_ADD &&
-                cgraph->nodes[i+2]->src[0] == cgraph->nodes[i+0] &&
-                cgraph->nodes[i+2]->src[1] == cgraph->nodes[i+1] &&
-                cgraph->nodes[i+0]->src[0]->type == cgraph->nodes[i+1]->src[0]->type &&
-               (cgraph->nodes[i+0]->src[0]->type == GGML_TYPE_F32 ||
-                cgraph->nodes[i+0]->src[0]->type == GGML_TYPE_F16 ||
-                cgraph->nodes[i+0]->src[0]->type == GGML_TYPE_BF16)) {
-                ggml_cuda_op_fused_rms_rms_add(ctx, cgraph->nodes[i+2]);
-                i += 2;
-            }
-            else if (fusion && i + 2 < cgraph->n_nodes &&
                 cgraph->nodes[i+1]->op == GGML_OP_VIEW &&
                 cgraph->nodes[i+2]->op == GGML_OP_FUSED_RMS_NORM &&
                 dst->ne[2] == 1 && cgraph->nodes[i+2]->ne[2] == 1) {
@@ -3676,6 +3664,9 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
             } else {
                 ggml_cuda_op_fused_rms_norm(ctx, dst);
             }
+            break;
+        case GGML_OP_FUSED_RMS_RMS_ADD:
+            ggml_cuda_op_fused_rms_rms_add(ctx, dst);
             break;
         case GGML_OP_FUSED_NORM:
             ggml_cuda_op_fused_rms_norm(ctx, dst, true);
@@ -4670,6 +4661,7 @@ GGML_CALL static bool ggml_backend_cuda_supports_op(ggml_backend_t backend, cons
         case GGML_OP_DIV:
         case GGML_OP_SUB:
         case GGML_OP_FUSED_RMS_NORM:
+        case GGML_OP_FUSED_RMS_RMS_ADD:
         case GGML_OP_SCALE:
         case GGML_OP_SOFTCAP:
         case GGML_OP_SQR:
