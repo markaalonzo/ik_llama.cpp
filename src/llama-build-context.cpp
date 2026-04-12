@@ -6602,6 +6602,8 @@ ggml_cgraph * llm_build_context::build_gemma4() {
             cur = ggml_add(ctx0, cur_mlp, cur_moe);
             cb(cur, "ffn_moe_combined", il);
 
+            ggml_build_forward_expand(gf, cur);
+
             cur = llm_build_norm(ctx0, cur, hparams, model.layers[il].ffn_post_norm, NULL, LLM_NORM_RMS, cb, -1);
             cb(cur, "ffn_post_norm", -1);
 
