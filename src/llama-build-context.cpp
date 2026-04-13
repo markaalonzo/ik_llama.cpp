@@ -6100,7 +6100,6 @@ static ggml_cgraph * build_gemma4_graph_parallel(llm_build_context & llm, llama_
 
             if (il == 0) {
                 sa_inp[id] = inpL;
-                //sa_inp[id] = do_split_norm(ctx0, inpL, l.attn_norm, hparams, cb, id, il_cb, false);
             } else {
                 GGML_ASSERT(inpL->op == GGML_OP_REDUCE);
                 auto cur = get_input_tensor_sm_graph(ctx0, inpL, id);
@@ -6561,9 +6560,6 @@ ggml_cgraph * llm_build_context::build_gemma4() {
                     model.layers[il].ffn_down, nullptr, nullptr,
                     nullptr,
                     LLM_FFN_GELU, LLM_FFN_PAR, cb, il, gf);
-
-            //cur_mlp = llm_build_norm(ctx0, cur_mlp, hparams, model.layers[il].ffn_post_norm_1, nullptr, LLM_NORM_RMS, cb, il);
-            //cb(cur_mlp, "ffn_mlp", il);
 
             // Expert FFN
             auto cur_moe = llm_build_norm(ctx0, attn_out, hparams, model.layers[il].ffn_pre_norm_2, nullptr, LLM_NORM_RMS, cb, il);
