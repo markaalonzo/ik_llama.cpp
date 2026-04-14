@@ -1,40 +1,18 @@
 #pragma once
 #include <cuda_runtime.h>
+#include "../ggml-turbo-quant-data.h"
 #include <cuda_fp16.h>
 #include "ggml-common.h"
 
 // Lloyd-Max codebooks in constant memory for fast lookup
-static __constant__ float d_turbo_centroids_3bit[8] = {
-    -0.190685f, -0.117832f, -0.065717f, -0.021460f,
-     0.021460f,  0.065717f,  0.117832f,  0.190685f
-};
-static __constant__ float d_turbo_mid_3bit[7] = {
-    -0.154259f, -0.091775f, -0.043589f, 0.0f, 0.043589f, 0.091775f, 0.154259f
-};
+static __constant__ float d_turbo_centroids_3bit[] = TURBO_CENTROIDS_3BIT_INIT;
+static __constant__ float d_turbo_mid_3bit[] = TURBO_MIDPOINTS_3BIT_INIT;
 
-static __constant__ float d_turbo_centroids_4bit[16] = {
-    -0.241556f, -0.182907f, -0.143047f, -0.111065f,
-    -0.083317f, -0.058069f, -0.034311f, -0.011353f,
-     0.011353f,  0.034311f,  0.058069f,  0.083317f,
-     0.111065f,  0.143047f,  0.182907f,  0.241556f,
-};
-static __constant__ float d_turbo_mid_4bit[15] = {
-    -0.212232f, -0.162977f, -0.127056f, -0.097191f, -0.070693f,
-    -0.046190f, -0.022832f,  0.000000f,  0.022832f,  0.046190f,
-     0.070693f,  0.097191f,  0.127056f,  0.162977f,  0.212232f,
-};
+static __constant__ float d_turbo_centroids_4bit[] = TURBO_CENTROIDS_4BIT_INIT;
+static __constant__ float d_turbo_mid_4bit[] = TURBO_MIDPOINTS_4BIT_INIT;
 
-// FWHT sign arrays (must match turbo-wht.cu)
-static __constant__ float d_tq_wht_s1[128] = {
-    -1, 1, 1,-1,-1, 1,-1, 1,-1,-1, 1, 1, 1, 1, 1, 1, 1,-1, 1,-1, 1,-1,-1, 1, 1, 1,-1, 1, 1,-1,-1,-1,
-    -1, 1, 1,-1, 1, 1,-1, 1,-1, 1, 1,-1,-1, 1,-1, 1, 1, 1, 1,-1,-1,-1,-1,-1, 1,-1, 1, 1, 1, 1,-1, 1,
-    -1,-1, 1,-1,-1,-1, 1,-1,-1,-1, 1,-1,-1,-1, 1, 1, 1,-1,-1, 1, 1, 1,-1,-1, 1, 1,-1, 1, 1,-1, 1,-1,
-    -1, 1, 1,-1, 1,-1, 1,-1, 1, 1, 1, 1,-1, 1,-1, 1, 1,-1, 1, 1,-1,-1,-1,-1,-1, 1, 1,-1, 1, 1,-1, 1};
-static __constant__ float d_tq_wht_s2[128] = {
-     1, 1, 1, 1,-1, 1, 1,-1, 1,-1,-1,-1, 1,-1,-1,-1, 1, 1,-1,-1, 1,-1, 1,-1, 1,-1,-1, 1,-1, 1, 1, 1,
-     1, 1,-1,-1,-1, 1,-1,-1,-1,-1,-1,-1, 1, 1, 1,-1, 1,-1, 1, 1, 1,-1,-1, 1,-1,-1,-1,-1,-1,-1, 1, 1,
-     1,-1, 1,-1,-1,-1,-1, 1,-1, 1,-1, 1,-1,-1, 1, 1,-1, 1,-1, 1, 1,-1, 1,-1,-1,-1,-1, 1,-1,-1, 1,-1,
-     1,-1, 1, 1, 1,-1,-1, 1,-1, 1,-1, 1, 1,-1,-1, 1,-1, 1,-1, 1, 1,-1, 1,-1, 1,-1,-1,-1,-1,-1, 1,-1};
+static __constant__ float d_tq_wht_s1[] = TURBO_WHT_S1_INIT;
+static __constant__ float d_tq_wht_s2[] = TURBO_WHT_S2_INIT;
 
 // === Inline FWHT for set-rows kernels (single-thread, sequential) ===
 static __device__ __forceinline__

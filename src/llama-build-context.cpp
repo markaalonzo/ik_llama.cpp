@@ -1523,6 +1523,18 @@ llm_expert_gating_func_type   gating_op,
     return cur;
 }
 
+// TurboQuant: inverse FWHT on the FA output when V uses a turbo KV cache type.
+// Paired with forward rotation applied on V before quantize-on-write.
+static inline ggml_tensor * apply_turbo_wht_inv_v(
+        ggml_context * ctx, ggml_tensor * cur,
+        const llama_kv_cache & kv, const llm_build_cb & cb, int il) {
+    if (kv.type_v == GGML_TYPE_TURBO3_0 || kv.type_v == GGML_TYPE_TURBO4_0) {
+        cur = ggml_turbo_wht(ctx, cur, 1);
+        cb(cur, "fa_turbo_wht_inv", il);
+    }
+    return cur;
+}
+
 static ggml_tensor * llm_build_kqv(
         struct ggml_context * ctx,
        struct llama_context & lctx,
@@ -1619,10 +1631,7 @@ static ggml_tensor * llm_build_kqv(
             cur = ggml_hadamard(ctx, cur, n_embd_head_v);
             cb(cur, "fa_h", il);
         }
-        if (kv_self.type_v == GGML_TYPE_TURBO3_0 || kv_self.type_v == GGML_TYPE_TURBO4_0) {
-            cur = ggml_turbo_wht(ctx, cur, 1);  // direction=1: inverse
-            cb(cur, "fa_turbo_wht_inv", il);
-        }
+        cur = apply_turbo_wht_inv_v(ctx, cur, kv, cb, il);
         cur = ggml_reshape_2d(ctx, cur, n_embd_head_v*n_head, n_tokens);
     } else {
 
@@ -1795,8 +1804,8 @@ ggml_tensor * llm_build_context::llm_build_kv(
     // TurboQuant: apply FWHT rotation when turbo KV cache types are active.
     // Forward rotation (direction=0) on K/V before quantize-on-write.
     // Q gets the same rotation so Q·K dot products are preserved.
-    const bool turbo_k = (kv_self.type_k == GGML_TYPE_TURBO3_0 || kv_self.type_k == GGML_TYPE_TURBO4_0);
-    const bool turbo_v = (kv_self.type_v == GGML_TYPE_TURBO3_0 || kv_self.type_v == GGML_TYPE_TURBO4_0);
+    const bool turbo_k = (kv.type_k == GGML_TYPE_TURBO3_0 || kv.type_k == GGML_TYPE_TURBO4_0);
+    const bool turbo_v = (kv.type_v == GGML_TYPE_TURBO3_0 || kv.type_v == GGML_TYPE_TURBO4_0);
     if (turbo_k) {
         q_cur = ggml_turbo_wht(ctx, q_cur, 0);
         if (k_cur) {
@@ -6255,10 +6264,7 @@ static ggml_cgraph * build_gemma4_graph_parallel(llm_build_context & llm, llama_
                 cur = ggml_hadamard(ctx0, cur, n_embd_head_v);
                 cb(cur, "fa_h", il_cb);
             }
-            if (kv_self.type_v == GGML_TYPE_TURBO3_0 || kv_self.type_v == GGML_TYPE_TURBO4_0) {
-                cur = ggml_turbo_wht(ctx0, cur, 1);  // direction=1: inverse
-                cb(cur, "fa_turbo_wht_inv", il_cb);
-            }
+            cur = apply_turbo_wht_inv_v(ctx0, cur, llm.kv_self, cb, il_cb);
             cur = ggml_reshape_2d(ctx0, cur, wo->splits[id]->ne[0], n_tokens);
             if (il == hparams.n_layer-1 && inp_out_ids) {
                 cur = ggml_get_rows(ctx0, cur, inp_out_ids);

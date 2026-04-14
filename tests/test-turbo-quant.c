@@ -103,7 +103,6 @@ int main(void) {
     for (int i = 0; i < d; i++) input[i] = 1e-8f * (i % 3 - 1);
     quantize_row_turbo4_0_ref(input, (block_turbo4_0 *)qbuf, d);
     dequantize_row_turbo4_0((const block_turbo4_0 *)qbuf, output, d);
-    printf("  turbo4: OutNorm=%.12f (should be ~0)\n", 0.0);
     float out_norm = 0;
     for (int i = 0; i < d; i++) out_norm += output[i] * output[i];
     printf("  turbo4: actual OutNorm=%.12f\n", sqrtf(out_norm));

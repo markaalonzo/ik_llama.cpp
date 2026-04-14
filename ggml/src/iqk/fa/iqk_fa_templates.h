@@ -10,6 +10,7 @@
 #pragma once
 
 #include "iqk/iqk_config.h"
+#include "../../ggml-turbo-quant-data.h"
 
 #if defined IQK_IMPLEMENT && defined GGML_IQK_FLASH_ATTENTION
 
@@ -660,16 +661,8 @@ struct HelperIQ4nl final : public BaseHelper {
 // TurboQuant helpers: dequantize turbo blocks to float, then load into SIMD.
 // Not SIMD-optimized yet — correct first, fast later.
 // Lloyd-Max codebooks (must match ggml-turbo-quant.c)
-static const float turbo_centroids_3bit[8] = {
-    -0.190685f, -0.117832f, -0.065717f, -0.021460f,
-     0.021460f,  0.065717f,  0.117832f,  0.190685f
-};
-static const float turbo_centroids_4bit[16] = {
-    -0.241556f, -0.182907f, -0.143047f, -0.111065f,
-    -0.083317f, -0.058069f, -0.034311f, -0.011353f,
-     0.011353f,  0.034311f,  0.058069f,  0.083317f,
-     0.111065f,  0.143047f,  0.182907f,  0.241556f,
-};
+static const float turbo_centroids_3bit[] = TURBO_CENTROIDS_3BIT_INIT;
+static const float turbo_centroids_4bit[] = TURBO_CENTROIDS_4BIT_INIT;
 
 struct HelperTurbo4 final : public BaseHelper {
     using Base = BaseHelper;

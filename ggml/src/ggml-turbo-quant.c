@@ -1,57 +1,31 @@
 /*
  * TurboQuant: KV cache compression via FWHT rotation + Lloyd-Max codebook
  * Based on: arXiv 2504.19874 (ICLR 2026)
- * Port to ik_llama.cpp from spiritbuun/buun-llama-cpp
  *
- * Key difference from original proposal: uses Fast Walsh-Hadamard Transform
- * (O(n log n)) instead of dense rotation matrix (O(n^2)), solving the
- * throughput regression that got the original rejected from ik_llama.cpp.
+ * Uses Fast Walsh-Hadamard Transform (O(n log n)) instead of a dense
+ * rotation matrix (O(n^2)).
  */
 
 #include "ggml-quants.h"
 #include "ggml-common.h"
 #include "ggml-impl.h"
+#include "ggml-turbo-quant-data.h"
 
 #include <math.h>
 #include <string.h>
 
 /* ---------- FWHT sign arrays (deterministic, seed=42) ---------- */
-/* These must match the CUDA __constant__ arrays exactly */
 
-static const float TURBO_WHT_S1[128] = {
-    -1, 1, 1,-1,-1, 1,-1, 1,-1,-1, 1, 1, 1, 1, 1, 1, 1,-1, 1,-1, 1,-1,-1, 1, 1, 1,-1, 1, 1,-1,-1,-1,
-    -1, 1, 1,-1, 1, 1,-1, 1,-1, 1, 1,-1,-1, 1,-1, 1, 1, 1, 1,-1,-1,-1,-1,-1, 1,-1, 1, 1, 1, 1,-1, 1,
-    -1,-1, 1,-1,-1,-1, 1,-1,-1,-1, 1,-1,-1,-1, 1, 1, 1,-1,-1, 1, 1, 1,-1,-1, 1, 1,-1, 1, 1,-1, 1,-1,
-    -1, 1, 1,-1, 1,-1, 1,-1, 1, 1, 1, 1,-1, 1,-1, 1, 1,-1, 1, 1,-1,-1,-1,-1,-1, 1, 1,-1, 1, 1,-1, 1
-};
-static const float TURBO_WHT_S2[128] = {
-     1, 1, 1, 1,-1, 1, 1,-1, 1,-1,-1,-1, 1,-1,-1,-1, 1, 1,-1,-1, 1,-1, 1,-1, 1,-1,-1, 1,-1, 1, 1, 1,
-     1, 1,-1,-1,-1, 1,-1,-1,-1,-1,-1,-1, 1, 1, 1,-1, 1,-1, 1, 1, 1,-1,-1, 1,-1,-1,-1,-1,-1,-1, 1, 1,
-     1,-1, 1,-1,-1,-1,-1, 1,-1, 1,-1, 1,-1,-1, 1, 1,-1, 1,-1, 1, 1,-1, 1,-1,-1,-1,-1, 1,-1,-1, 1,-1,
-     1,-1, 1, 1, 1,-1,-1, 1,-1, 1,-1, 1, 1,-1,-1, 1,-1, 1,-1, 1, 1,-1, 1,-1, 1,-1,-1,-1,-1,-1, 1,-1
-};
+static const float TURBO_WHT_S1[] = TURBO_WHT_S1_INIT;
+static const float TURBO_WHT_S2[] = TURBO_WHT_S2_INIT;
 
 /* ---------- Lloyd-Max codebooks (optimal for post-FWHT Gaussian) ---------- */
 
-static const float CENTROIDS_3BIT[8] = {
-    -0.190685f, -0.117832f, -0.065717f, -0.021460f,
-     0.021460f,  0.065717f,  0.117832f,  0.190685f
-};
-static const float MIDPOINTS_3BIT[7] = {
-    -0.154259f, -0.091775f, -0.043589f, 0.0f, 0.043589f, 0.091775f, 0.154259f
-};
+static const float CENTROIDS_3BIT[] = TURBO_CENTROIDS_3BIT_INIT;
+static const float MIDPOINTS_3BIT[] = TURBO_MIDPOINTS_3BIT_INIT;
 
-static const float CENTROIDS_4BIT[16] = {
-    -0.241556f, -0.182907f, -0.143047f, -0.111065f,
-    -0.083317f, -0.058069f, -0.034311f, -0.011353f,
-     0.011353f,  0.034311f,  0.058069f,  0.083317f,
-     0.111065f,  0.143047f,  0.182907f,  0.241556f,
-};
-static const float MIDPOINTS_4BIT[15] = {
-    -0.212232f, -0.162977f, -0.127056f, -0.097191f, -0.070693f,
-    -0.046190f, -0.022832f,  0.000000f,  0.022832f,  0.046190f,
-     0.070693f,  0.097191f,  0.127056f,  0.162977f,  0.212232f,
-};
+static const float CENTROIDS_4BIT[] = TURBO_CENTROIDS_4BIT_INIT;
+static const float MIDPOINTS_4BIT[] = TURBO_MIDPOINTS_4BIT_INIT;
 
 /* ---------- FWHT: O(n log n) rotation ---------- */
 
