@@ -280,6 +280,9 @@ struct clip_layer {
     ggml_tensor * ls_2_w = nullptr;
     ggml_tensor * ls_out_w = nullptr; // gemma4
 
+    ggml_tensor * ff_post_norm_w = nullptr;
+    ggml_tensor * attn_post_norm_w = nullptr;
+
     // qwen3vl deepstack merger
     ggml_tensor * deepstack_norm_w = nullptr;
     ggml_tensor * deepstack_norm_b = nullptr;
@@ -2332,6 +2335,17 @@ private:
                     // TODO: q/k norm requires row size == n_embd, while here it's d_head
                     // we can add support in the future if needed
                     GGML_ASSERT(layer.q_norm == nullptr && layer.k_norm == nullptr);
+                    if (layer.q_norm) {
+                        GGML_ASSERT(layer.q_norm->ne[0] == Qcur->ne[0]);
+                        Qcur = build_norm(Qcur, layer.q_norm, NULL, norm_t, eps, il);
+                        cb(Qcur, "Qcur_norm", il);
+                    }
+
+                    if (layer.k_norm) {
+                        GGML_ASSERT(layer.k_norm->ne[0] == Kcur->ne[0]);
+                        Kcur = build_norm(Kcur, layer.k_norm, NULL, norm_t, eps, il);
+                        cb(Kcur, "Kcur_norm", il);
+                    }
 
                 } else {
                     // separate q, k, v
@@ -2350,19 +2364,35 @@ private:
                         Vcur = ggml_add(ctx0, Vcur, layer.v_b);
                     }
 
-                    if (layer.q_norm) {
-                        Qcur = build_norm(Qcur, layer.q_norm, NULL, norm_t, eps, il);
-                        cb(Qcur, "Qcur_norm", il);
-                    }
+                    bool norm_per_head = layer.q_norm && layer.q_norm->ne[0] == d_head;
 
-                    if (layer.k_norm) {
-                        Kcur = build_norm(Kcur, layer.k_norm, NULL, norm_t, eps, il);
-                        cb(Kcur, "Kcur_norm", il);
+                    if (!norm_per_head) {
+                        if (layer.q_norm) {
+                            Qcur = build_norm(Qcur, layer.q_norm, NULL, norm_t, eps, il);
+                            cb(Qcur, "Qcur_norm", il);
+                        }
+
+                        if (layer.k_norm) {
+                            Kcur = build_norm(Kcur, layer.k_norm, NULL, norm_t, eps, il);
+                            cb(Kcur, "Kcur_norm", il);
+                        }
                     }
 
                     Qcur = ggml_reshape_3d(ctx0, Qcur, d_head, n_head, n_pos);
                     Kcur = ggml_reshape_3d(ctx0, Kcur, d_head, n_head, n_pos);
                     Vcur = ggml_reshape_3d(ctx0, Vcur, d_head, n_head, n_pos);
+
+                    if (norm_per_head) {
+                        if (layer.q_norm) {
+                            Qcur = build_norm(Qcur, layer.q_norm, NULL, norm_t, eps, il);
+                            cb(Qcur, "Qcur_norm_per_head", il);
+                        }
+                        if (layer.k_norm) {
+                            Kcur = build_norm(Kcur, layer.k_norm, NULL, norm_t, eps, il);
+                            cb(Kcur, "Kcur_norm_per_head", il);
+                        }
+                    }
+
                 }
 
                 cb(Qcur, "Qcur", il);
@@ -2391,6 +2421,11 @@ private:
                 cb(cur, "attn_out_scaled", il);
             }
 
+            if (layer.attn_post_norm_w) {
+                cur = build_norm(cur, layer.attn_post_norm_w, nullptr, norm_t, eps, il);
+                cb(cur, "attn_post_normed", il);
+            }
+
             // re-add the layer input, e.g., residual
             cur = ggml_add(ctx0, cur, inpL);
 
@@ -2411,6 +2446,11 @@ private:
 
             cb(cur, "ffn_out", il);
 
+            if (layer.ff_post_norm_w) {
+                cur = build_norm(cur, layer.ff_post_norm_w, nullptr, norm_t, eps, il);
+                cb(cur, "ffn_post_normed", il);
+            }
+
             if (layer.ls_2_w) {
                 cur = ggml_mul(ctx0, cur, layer.ls_2_w);
                 cb(cur, "ffn_out_scaled", il);
@@ -2419,6 +2459,11 @@ private:
             // residual 2
             cur = ggml_add(ctx0, inpL, cur);
             cb(cur, "layer_out", il);
+
+            if (layer.ls_out_w) {
+                cur = ggml_mul(ctx0, cur, layer.ls_out_w);
+                cb(cur, "layer_out_scaled", il);
+            }
 
             inpL = cur;
         }
@@ -3356,6 +3401,9 @@ struct clip_model_loader {
             layer.ln_2_w = get_tensor(string_format(TN_LN_2,        prefix, il, "weight"), false);
             layer.ls_1_w = get_tensor(string_format(TN_LS_1,        prefix, il, "weight"), false); // no bias
             layer.ls_2_w = get_tensor(string_format(TN_LS_2,        prefix, il, "weight"), false); // no bias
+            layer.ls_out_w      = get_tensor(string_format(TN_LS_OUT,        prefix, il, "weight"), false); // no bias
+            layer.attn_post_norm_w = get_tensor(string_format(TN_ATTN_POST_NORM, prefix, il, "weight"), false); // no bias
+            layer.ff_post_norm_w   = get_tensor(string_format(TN_FFN_POST_NORM,  prefix, il, "weight"), false); // no bias
 
             layer.k_b    = get_tensor(string_format(TN_ATTN_K,      prefix, il, "bias"), false);
             layer.q_b    = get_tensor(string_format(TN_ATTN_Q,      prefix, il, "bias"), false);
