@@ -28,10 +28,12 @@ static __global__ void k_turbo_wht(
 
     __shared__ float buf[128];
 
+    // Kernel is launched with exactly 128 threads per block (see launch
+    // config below). All threads participate in load/store; the butterfly
+    // only uses the first 64 threads (each processes one pair).
+
     // Load and apply first sign flip
-    if (threadIdx.x < 128) {
-        buf[threadIdx.x] = src[offset + threadIdx.x] * s_first[threadIdx.x];
-    }
+    buf[threadIdx.x] = src[offset + threadIdx.x] * s_first[threadIdx.x];
     __syncthreads();
 
     // Parallel FWHT butterfly: 64 threads, 7 passes (log2(128) = 7)
@@ -47,9 +49,7 @@ static __global__ void k_turbo_wht(
 
     // Normalize and apply second sign flip, write output
     constexpr float inv_sqrt_128 = 0.08838834764831845f;
-    if (threadIdx.x < 128) {
-        dst[offset + threadIdx.x] = buf[threadIdx.x] * inv_sqrt_128 * s_second[threadIdx.x];
-    }
+    dst[offset + threadIdx.x] = buf[threadIdx.x] * inv_sqrt_128 * s_second[threadIdx.x];
 }
 
 void ggml_cuda_op_turbo_wht(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {

@@ -1,16 +1,26 @@
 /*
  * TurboQuant round-trip test: quantize → dequantize → measure MSE + cosine similarity
+ *
+ * Scope: this test only exercises scalar quant/dequant fidelity on the CPU
+ * reference path. It does NOT cover:
+ *   - the CUDA quant kernels in ggml-cuda/turbo-quant-cuda.cuh
+ *   - the set-rows pointer arithmetic in ggml-cuda/set-rows.cu (the kind of
+ *     bug fixed in C3 would not be caught here)
+ *   - the flash-attention HelperTurbo3/4 dequant paths
+ *   - the full Q/K/V + attention pipeline with FWHT rotation.
+ *
+ * For end-to-end correctness, run a short prompt through the model with
+ *   --cache-type-k turbo4 --cache-type-v turbo4
+ * and compare perplexity / next-token logits against the fp16 baseline.
  */
 #include <stdio.h>
 #include <math.h>
 #include <string.h>
 #include <stdlib.h>
 
-/* Forward declarations — these are in ggml-turbo-quant.c */
-extern void quantize_row_turbo3_0_ref(const float * x, void * y, long long k);
-extern void dequantize_row_turbo3_0(const void * x, float * y, long long k);
-extern void quantize_row_turbo4_0_ref(const float * x, void * y, long long k);
-extern void dequantize_row_turbo4_0(const void * x, float * y, long long k);
+/* Use the real declarations — matching the actual int64_t / block_turbo*_0 *
+ * signatures rather than ABI-compatible-on-LP64 hand-written externs. */
+#include "ggml-turbo-quant.h"
 
 static void report(const char * name, const float * input, const float * output, int d) {
     float mse = 0, cosv = 0, ni = 0, no = 0;
@@ -43,33 +53,33 @@ int main(void) {
     printf("Test 1: e0 = [1, 0, ...]\n");
     memset(input, 0, sizeof(input));
     input[0] = 1.0f;
-    quantize_row_turbo4_0_ref(input, qbuf, d);
-    dequantize_row_turbo4_0(qbuf, output, d);
+    quantize_row_turbo4_0_ref(input, (block_turbo4_0 *)qbuf, d);
+    dequantize_row_turbo4_0((const block_turbo4_0 *)qbuf, output, d);
     report("turbo4", input, output, d);
-    quantize_row_turbo3_0_ref(input, qbuf, d);
-    dequantize_row_turbo3_0(qbuf, output, d);
+    quantize_row_turbo3_0_ref(input, (block_turbo3_0 *)qbuf, d);
+    dequantize_row_turbo3_0((const block_turbo3_0 *)qbuf, output, d);
     report("turbo3", input, output, d);
     printf("\n");
 
     /* Test 2: sinusoidal with large norm */
     printf("Test 2: sin(i*0.1+0.5) * 10\n");
     for (int i = 0; i < d; i++) input[i] = sinf(i * 0.1f + 0.5f) * 10.0f;
-    quantize_row_turbo4_0_ref(input, qbuf, d);
-    dequantize_row_turbo4_0(qbuf, output, d);
+    quantize_row_turbo4_0_ref(input, (block_turbo4_0 *)qbuf, d);
+    dequantize_row_turbo4_0((const block_turbo4_0 *)qbuf, output, d);
     report("turbo4", input, output, d);
-    quantize_row_turbo3_0_ref(input, qbuf, d);
-    dequantize_row_turbo3_0(qbuf, output, d);
+    quantize_row_turbo3_0_ref(input, (block_turbo3_0 *)qbuf, d);
+    dequantize_row_turbo3_0((const block_turbo3_0 *)qbuf, output, d);
     report("turbo3", input, output, d);
     printf("\n");
 
     /* Test 3: cosine pattern */
     printf("Test 3: cos(i*0.2) * 5\n");
     for (int i = 0; i < d; i++) input[i] = cosf(i * 0.2f) * 5.0f;
-    quantize_row_turbo4_0_ref(input, qbuf, d);
-    dequantize_row_turbo4_0(qbuf, output, d);
+    quantize_row_turbo4_0_ref(input, (block_turbo4_0 *)qbuf, d);
+    dequantize_row_turbo4_0((const block_turbo4_0 *)qbuf, output, d);
     report("turbo4", input, output, d);
-    quantize_row_turbo3_0_ref(input, qbuf, d);
-    dequantize_row_turbo3_0(qbuf, output, d);
+    quantize_row_turbo3_0_ref(input, (block_turbo3_0 *)qbuf, d);
+    dequantize_row_turbo3_0((const block_turbo3_0 *)qbuf, output, d);
     report("turbo3", input, output, d);
     printf("\n");
 
@@ -80,19 +90,19 @@ int main(void) {
         seed = seed * 1103515245 + 12345;
         input[i] = ((float)(seed >> 16) / 32768.0f - 1.0f) * 3.0f;
     }
-    quantize_row_turbo4_0_ref(input, qbuf, d);
-    dequantize_row_turbo4_0(qbuf, output, d);
+    quantize_row_turbo4_0_ref(input, (block_turbo4_0 *)qbuf, d);
+    dequantize_row_turbo4_0((const block_turbo4_0 *)qbuf, output, d);
     report("turbo4", input, output, d);
-    quantize_row_turbo3_0_ref(input, qbuf, d);
-    dequantize_row_turbo3_0(qbuf, output, d);
+    quantize_row_turbo3_0_ref(input, (block_turbo3_0 *)qbuf, d);
+    dequantize_row_turbo3_0((const block_turbo3_0 *)qbuf, output, d);
     report("turbo3", input, output, d);
     printf("\n");
 
     /* Test 5: near-zero vector (edge case) */
     printf("Test 5: near-zero (1e-8)\n");
     for (int i = 0; i < d; i++) input[i] = 1e-8f * (i % 3 - 1);
-    quantize_row_turbo4_0_ref(input, qbuf, d);
-    dequantize_row_turbo4_0(qbuf, output, d);
+    quantize_row_turbo4_0_ref(input, (block_turbo4_0 *)qbuf, d);
+    dequantize_row_turbo4_0((const block_turbo4_0 *)qbuf, output, d);
     printf("  turbo4: OutNorm=%.12f (should be ~0)\n", 0.0);
     float out_norm = 0;
     for (int i = 0; i < d; i++) out_norm += output[i] * output[i];

@@ -1948,6 +1948,13 @@ static const ggml_type_traits_t type_traits[GGML_TYPE_COUNT] = {
         .row_meta_size            = 0,
     },
     [GGML_TYPE_TURBO3_0] = {
+        // NOTE: blck_size=QK_TURBO3=32 (matches the storage block, consumed by
+        // flash attention helpers per-block), but the quantizer requires input
+        // aligned to QK_TURBO3_GROUP=128 because the FWHT rotation and norm
+        // correction operate on 128-element groups. The KV cache init in
+        // llama.cpp enforces head_dim % 128 == 0 for turbo types to bridge
+        // this mismatch; the assert in quantize_row_turbo3_0_ref catches
+        // direct API misuse.
         .type_name                = "turbo3_0",
         .blck_size                = QK_TURBO3,
         .type_size                = sizeof(block_turbo3_0),
@@ -4350,7 +4357,7 @@ static const char * GGML_OP_NAME[GGML_OP_COUNT] = {
     "FUSED_RMS_RMS_ADD",
 };
 
-static_assert(GGML_OP_COUNT == 102, "GGML_OP_COUNT != 102");
+static_assert(GGML_OP_COUNT == 103, "GGML_OP_COUNT != 103");
 
 static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "none",
@@ -4389,6 +4396,7 @@ static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "X*Y1&X*Y2",
     "x1*y1+x2*y2+...",
     "hadamard(x)",
+    "turbo_wht(x)",
 
     "x*v",
     "y-\\>view(x)",
@@ -4471,7 +4479,7 @@ static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
 
 };
 
-static_assert(GGML_OP_COUNT == 102, "GGML_OP_COUNT != 102");
+static_assert(GGML_OP_COUNT == 103, "GGML_OP_COUNT != 103");
 
 static_assert(GGML_OP_POOL_COUNT == 2, "GGML_OP_POOL_COUNT != 2");
 

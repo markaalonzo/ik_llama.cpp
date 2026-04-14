@@ -5,8 +5,13 @@
 
 typedef void (*set_rows_kernel_t)(const char * src, char * dst);
 
-// Generic quantized set_rows kernel template
-template<typename idx_t, typename block_type, int qk, void (*quantize_func)(const float*, block_type*)>
+// Generic quantized set_rows kernel template.
+//
+// `blocks_per_quant` is the number of `block_type` structs produced per qk-element
+// chunk. For most quant types this is 1 (one block = qk values). TURBO3 is the
+// exception: one quantize call covers QK_TURBO3_GROUP = 128 values but writes
+// 4 consecutive block_turbo3_0 structs (each block = 32 values).
+template<typename idx_t, typename block_type, int qk, void (*quantize_func)(const float*, block_type*), int blocks_per_quant = 1>
 static __global__ void k_set_rows_quant(
         const float * __restrict__ src0, const idx_t * __restrict__ src1, block_type * __restrict__ dst,
         const int64_t ne00, const int64_t ne01, const int64_t ne02, const int64_t ne03,
@@ -38,7 +43,7 @@ static __global__ void k_set_rows_quant(
     block_type * dst_row_ptr = dst + (dst_row*s1 + i02*s2 + i03*s3) / sizeof(block_type);
 
     const float * src_block = src0_row + i00;
-    block_type * dst_block = dst_row_ptr + i00 / qk;
+    block_type * dst_block = dst_row_ptr + (i00 / qk) * blocks_per_quant;
 
     quantize_func(src_block, dst_block);
 
@@ -47,7 +52,7 @@ static __global__ void k_set_rows_quant(
 }
 
 // Template dispatch function for quantized set_rows
-template<typename idx_t, typename block_type, int qk, void (*quantize_func)(const float*, block_type*)>
+template<typename idx_t, typename block_type, int qk, void (*quantize_func)(const float*, block_type*), int blocks_per_quant = 1>
 static void set_rows_cuda_quant(
         const float * src0_d, const idx_t * src1_d, block_type * dst_d,
         const int64_t ne00, const int64_t ne01, const int64_t ne02, const int64_t ne03,
@@ -74,7 +79,7 @@ static void set_rows_cuda_quant(
     const int64_t s3  = nb3;
 
     if (ne_total > 0) {
-        k_set_rows_quant<idx_t, block_type, qk, quantize_func><<<grid_size, block_size, 0, stream>>>(
+        k_set_rows_quant<idx_t, block_type, qk, quantize_func, blocks_per_quant><<<grid_size, block_size, 0, stream>>>(
             src0_d, src1_d, dst_d,
             ne00, ne01, ne02, ne03,
             ne10, ne11, ne12, ne13,
@@ -269,8 +274,8 @@ static void set_rows_cuda(ggml_backend_cuda_context & ctx, const ggml_tensor * s
         );
     } else if (dst->type == GGML_TYPE_TURBO3_0) {
         // TURBO3 uses QK=32 blocks but quantizes in 128-element groups (4 blocks).
-        // We dispatch with QK_TURBO3_GROUP=128 and cast to block_turbo3_0, writing 4 blocks per call.
-        set_rows_cuda_quant<idx_t, block_turbo3_0, QK_TURBO3_GROUP, quantize_f32_turbo3_0_group>(
+        // blocks_per_quant=4 tells the kernel to advance 4 blocks per 128-element group.
+        set_rows_cuda_quant<idx_t, block_turbo3_0, QK_TURBO3_GROUP, quantize_f32_turbo3_0_group, 4>(
             src0_d, src1_d, (block_turbo3_0*)dst->data,
             ne00, ne01, ne02, ne03,
             ne10, ne11, ne12, ne13,

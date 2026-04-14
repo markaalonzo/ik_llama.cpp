@@ -753,6 +753,32 @@ static bool llama_kv_cache_init(
     cache.type_k  = type_k;
     cache.type_v  = type_v;
 
+    // TurboQuant (turbo3_0 / turbo4_0) requires head_dim % 128 == 0. The FWHT
+    // rotation operates on 128-element groups, and the ggml type's blck_size
+    // (32 for turbo3, 128 for turbo4) is sufficient for allocation but does NOT
+    // guarantee the rotation is valid. Reject unsupported head dims up front
+    // rather than producing silently wrong results or crashing in quantize.
+    auto is_turbo = [](ggml_type t) {
+        return t == GGML_TYPE_TURBO3_0 || t == GGML_TYPE_TURBO4_0;
+    };
+    if (is_turbo(type_k) || is_turbo(type_v)) {
+        for (int i = 0; i < (int) n_layer; ++i) {
+            if (!hparams.has_kv(i)) continue;
+            const uint32_t hd_k = hparams.n_embd_head_k(i);
+            const uint32_t hd_v = hparams.n_embd_head_v(i);
+            if (is_turbo(type_k) && hd_k % 128 != 0) {
+                LLAMA_LOG_ERROR("%s: turbo K cache requires n_embd_head_k %% 128 == 0, "
+                                "got %u at layer %d\n", __func__, hd_k, i);
+                return false;
+            }
+            if (is_turbo(type_v) && hd_v % 128 != 0) {
+                LLAMA_LOG_ERROR("%s: turbo V cache requires n_embd_head_v %% 128 == 0, "
+                                "got %u at layer %d\n", __func__, hd_v, i);
+                return false;
+            }
+        }
+    }
+
     cache.cells.clear();
     cache.cells.resize(kv_size);
 
