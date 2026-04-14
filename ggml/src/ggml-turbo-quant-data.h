@@ -1,5 +1,4 @@
-#ifndef GGML_TURBO_QUANT_DATA_H
-#define GGML_TURBO_QUANT_DATA_H
+#pragma once
 
 // Canonical TurboQuant constants. Each TU (CPU, CUDA quantize, CUDA FWHT,
 // iqk FA templates) declares its own storage and initializes from these
@@ -35,4 +34,3 @@
     -0.046190f, -0.022832f,  0.000000f,  0.022832f,  0.046190f, \
      0.070693f,  0.097191f,  0.127056f,  0.162977f,  0.212232f, }
 
-#endif // GGML_TURBO_QUANT_DATA_H

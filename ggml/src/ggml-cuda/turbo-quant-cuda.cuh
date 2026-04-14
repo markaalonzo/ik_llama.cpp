@@ -1,4 +1,5 @@
 #pragma once
+// Used by set-rows.cu to quantize rows into turbo3_0 / turbo4_0 blocks.
 #include <cuda_runtime.h>
 #include "../ggml-turbo-quant-data.h"
 #include <cuda_fp16.h>

@@ -1520,6 +1520,7 @@ add_library(ggml
             ggml-quants.h
             ggml-turbo-quant.c
             ggml-turbo-quant.h
+    ggml-turbo-quant-data.h
             ${GGML_SOURCES_CUDA}      ${GGML_HEADERS_CUDA}
             ${GGML_SOURCES_METAL}     ${GGML_HEADERS_METAL}
             ${GGML_SOURCES_RPC}       ${GGML_HEADERS_RPC}
