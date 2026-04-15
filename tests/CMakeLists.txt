@@ -140,8 +140,18 @@ llama_test(test-tokenizer-0 NAME test-tokenizer-0-starcoder         ARGS ${CMAKE
 
 if (LLAMA_LLGUIDANCE)
     llama_target_and_test(test-grammar-llguidance.cpp ARGS ${CMAKE_CURRENT_SOURCE_DIR}/../models/ggml-vocab-llama-bpe.gguf)
-    llama_target_and_test(test-turbo-quant.c)
 endif ()
+
+# TurboQuant round-trip test: CPU-only quant/dequant fidelity checks.
+# Uses internal headers in ggml/src/, so build as a direct executable
+# rather than via llama_target_and_test (which only exposes public headers).
+add_executable(test-turbo-quant test-turbo-quant.c)
+target_include_directories(test-turbo-quant PRIVATE
+    ${CMAKE_SOURCE_DIR}/ggml/include
+    ${CMAKE_SOURCE_DIR}/ggml/src)
+target_link_libraries(test-turbo-quant PRIVATE ggml m)
+add_test(NAME test-turbo-quant COMMAND $<TARGET_FILE:test-turbo-quant>)
+set_property(TEST test-turbo-quant PROPERTY LABELS "main")
 
 if (NOT WIN32)
     # these tests are disabled on Windows because they use internal functions not exported with LLAMA_API
