@@ -1936,23 +1936,55 @@ static common_chat_params common_chat_params_init_qwen3_coder_xml(const common_c
         data.preserved_tokens.insert(data.preserved_tokens.end(), { "<think>", "</think>" });
     }
 
-    // build grammar for tool call
-    static const xml_tool_call_format form = ([]() {
-        xml_tool_call_format form{};
-        form.scope_start = "";
-        form.tool_start = "\n<tool_call>\n<function=";
-        form.tool_sep = ">\n";
-        form.key_start = "<parameter=";
-        form.key_val_sep = ">\n";
-        form.val_end = "\n</parameter>\n";
-        form.tool_end = "</function>\n</tool_call>";
-        form.scope_end = "";
-        form.relax_arg = true;
-        return form;
+    // Build grammar. Three cases:
+    //   1) tools present -> XML tool-call grammar (existing behavior)
+    //   2) json_schema present, no tools -> schema grammar (respects optional
+    //      thinking prefix when the template supports it)
+    //   3) neither -> no grammar (free generation)
+    const bool has_tools = params.tools.is_array() && !params.tools.empty();
+    if (has_tools) {
+        static const xml_tool_call_format form = ([]() {
+            xml_tool_call_format form{};
+            form.scope_start = "";
+            form.tool_start = "\n<tool_call>\n<function=";
+            form.tool_sep = ">\n";
+            form.key_start = "<parameter=";
+            form.key_val_sep = ">\n";
+            form.val_end = "\n</parameter>\n";
+            form.tool_end = "</function>\n</tool_call>";
+            form.scope_end = "";
+            form.relax_arg = true;
+            return form;
         })();
         build_grammar_xml_tool_call(data, params.tools, form);
+    } else if (!params.json_schema.is_null()) {
+        if (!params.grammar.empty()) {
+            throw std::runtime_error("Either \"json_schema\" or \"grammar\" can be specified, but not both");
+        }
+        // Strict schema enforcement. If the template keeps <think>...</think>
+        // open, use a lazy grammar that triggers once thinking ends, captures
+        // the </think> tag, and prepends an optional "</think>" consumer to
+        // the root rule so the replayed tag is absorbed before the schema
+        // starts. Mirrors deepseek_r1, deepseek_v3_1, and kimi_k2 precedents.
+        // Otherwise enforce from the first token (grammar_lazy stays false
+        // from function entry when tools are absent).
+        if (data.thinking_forced_open) {
+            data.grammar_lazy = true;
+            data.grammar_triggers.push_back({
+                COMMON_GRAMMAR_TRIGGER_TYPE_PATTERN_FULL,
+                "[\\s\\S]*?(</think>\\s*)",
+            });
+        }
+        data.grammar = build_grammar([&](const common_grammar_builder & builder) {
+            auto schema = params.json_schema;
+            builder.resolve_refs(schema);
+            builder.add_rule("root",
+                std::string(data.thinking_forced_open ? "( \"</think>\" space )? " : "") +
+                builder.add_schema("response", schema));
+        });
+    }
 
-        return data;
+    return data;
 }
 
 static common_chat_params common_chat_params_init_kimi_k2(const common_chat_template & tmpl, const struct templates_params & params) {
