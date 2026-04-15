@@ -6,6 +6,7 @@
 //
 
 #include "convert.cuh"
+#include "turbo-quant-cuda.cuh"
 #include "dequantize.cuh"
 
 #define CUDA_Q8_0_NE_ALIGN 2048
@@ -1914,6 +1915,50 @@ to_bf16_cuda_t ggml_get_to_bf16_cuda(ggml_type type) {
     }
 }
 
+
+template<typename dst_t>
+static __global__ void dequantize_block_turbo4_0(const void * __restrict__ vx, dst_t * __restrict__ y, int nb) {
+    const int ib = blockIdx.x;
+    if (ib >= nb) return;
+    const block_turbo4_0 * x = ((const block_turbo4_0 *)vx) + ib;
+    const float norm = __half2float(x->norm);
+    const int tid = threadIdx.x;
+    if (tid >= 64) return;
+    const uint8_t byte   = x->qs[tid];
+    const uint8_t idx_lo = byte & 0xF;
+    const uint8_t idx_hi = (byte >> 4) & 0xF;
+    y[ib * 128 + tid * 2 + 0] = (dst_t)(d_turbo_centroids_4bit[idx_lo] * norm);
+    y[ib * 128 + tid * 2 + 1] = (dst_t)(d_turbo_centroids_4bit[idx_hi] * norm);
+}
+
+template<typename dst_t>
+static __global__ void dequantize_block_turbo3_0(const void * __restrict__ vx, dst_t * __restrict__ y, int nb) {
+    const int ib = blockIdx.x;
+    if (ib >= nb) return;
+    const block_turbo3_0 * x = ((const block_turbo3_0 *)vx) + ib;
+    const float norm = __half2float(x->norm);
+    const int j = threadIdx.x;
+    if (j >= QK_TURBO3) return;
+    const uint8_t low2 = (x->qs[j / 4] >> ((j % 4) * 2)) & 0x3;
+    const uint8_t hi1  = (x->signs[j / 8] >> (j % 8)) & 0x1;
+    const uint8_t idx  = low2 | (hi1 << 2);
+    y[ib * QK_TURBO3 + j] = (dst_t)(d_turbo_centroids_3bit[idx] * norm);
+}
+
+template<typename dst_t>
+static void dequantize_row_turbo4_0_cuda(const void * vx, dst_t * y, const int64_t nrows, const int64_t n_per_row, cudaStream_t stream) {
+    const int64_t k  = nrows * n_per_row;
+    const int     nb = (int)(k / 128);
+    dequantize_block_turbo4_0<<<nb, 64, 0, stream>>>(vx, y, nb);
+}
+
+template<typename dst_t>
+static void dequantize_row_turbo3_0_cuda(const void * vx, dst_t * y, const int64_t nrows, const int64_t n_per_row, cudaStream_t stream) {
+    const int64_t k  = nrows * n_per_row;
+    const int     nb = (int)(k / QK_TURBO3);
+    dequantize_block_turbo3_0<<<nb, 32, 0, stream>>>(vx, y, nb);
+}
+
 to_fp16_cuda_t ggml_get_to_fp16_cuda(ggml_type type) {
     switch (type) {
         case GGML_TYPE_Q4_0:
@@ -2015,6 +2060,10 @@ to_fp16_cuda_t ggml_get_to_fp16_cuda(ggml_type type) {
             return dequantize_row_iq5_k_r4_cuda;
         case GGML_TYPE_IQ5_KS_R4:
             return dequantize_row_iq5_ks_r4_cuda;
+        case GGML_TYPE_TURBO3_0:
+            return dequantize_row_turbo3_0_cuda;
+        case GGML_TYPE_TURBO4_0:
+            return dequantize_row_turbo4_0_cuda;
         default:
             return nullptr;
     }

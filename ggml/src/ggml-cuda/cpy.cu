@@ -2,6 +2,7 @@
 #include "dequantize.cuh"
 #include "graph.cuh"
 #include "cpy-utils.cuh"
+#include "turbo-quant-cuda.cuh"
 #if defined(GGML_USE_MUSA) && defined(GGML_MUSA_MUDNN_COPY)
 #include "ggml-musa/mudnn.cuh"
 #endif // GGML_USE_MUSA && GGML_MUSA_MUDNN_COPY
@@ -506,6 +507,71 @@ static void transpose_q8_0(ggml_backend_cuda_context & ctx, const ggml_tensor * 
 }
 
 
+// TurboQuant copy kernels. Source is f32 (Kcur/Vcur after ggml_turbo_wht),
+// destination is turbo3_0 or turbo4_0 KV cache. One CUDA block per 128-element
+// quantize group; the per-thread quantize_f32_turbo*_0_* device helpers do FWHT
+// + Lloyd-Max + norm correction internally.
+template <typename block_type, void (*quantize_fn)(const float *, block_type *), int blocks_per_group>
+static __global__ void cpy_f32_turbo(
+        const char * cx, char * cdst_direct, const int ne,
+        const int ne00, const int ne01, const int ne02,
+        const int nb00, const int nb01, const int nb02, const int nb03,
+        const int ne10, const int ne11, const int ne12,
+        const int nb10, const int nb11, const int nb12, const int nb13,
+        char ** cdst_indirect, int graph_cpynode_index) {
+    const int i = (blockDim.x*blockIdx.x + threadIdx.x) * 128;
+    if (i >= ne) return;
+
+    char * cdst = (cdst_indirect != nullptr) ? cdst_indirect[graph_cpynode_index] : cdst_direct;
+
+    const int i03 = i / (ne00 * ne01 * ne02);
+    const int i02 = (i - i03*ne00*ne01*ne02) / (ne00*ne01);
+    const int i01 = (i - i03*ne00*ne01*ne02 - i02*ne01*ne00) / ne00;
+    const int i00 = i - i03*ne00*ne01*ne02 - i02*ne01*ne00 - i01*ne00;
+    const int x_offset = i00*nb00 + i01*nb01 + i02*nb02 + i03*nb03;
+
+    const int i13 = i / (ne10 * ne11 * ne12);
+    const int i12 = (i - i13*ne10*ne11*ne12) / (ne10*ne11);
+    const int i11 = (i - i13*ne10*ne11*ne12 - i12*ne10*ne11) / ne10;
+    const int i10 = i - i13*ne10*ne11*ne12 - i12*ne10*ne11 - i11*ne10;
+    // blocks_per_group = number of storage blocks produced per 128-element group.
+    // turbo4_0 stores 128 elements per block (1 block / group).
+    // turbo3_0 stores 32 elements per block (4 blocks / group).
+    const int dst_offset = (i10/128)*blocks_per_group*nb10 + i11*nb11 + i12*nb12 + i13*nb13;
+
+    quantize_fn((const float *)(cx + x_offset), (block_type *)(cdst + dst_offset));
+}
+
+static void ggml_cpy_f32_turbo4_0_cuda(
+        const char * cx, char * cdst, const int ne,
+        const int ne00, const int ne01, const int ne02,
+        const int nb00, const int nb01, const int nb02, const int nb03,
+        const int ne10, const int ne11, const int ne12,
+        const int nb10, const int nb11, const int nb12, const int nb13,
+        cudaStream_t stream, char ** cdst_indirect, int & graph_cpynode_index) {
+    GGML_ASSERT(ne % 128 == 0);
+    const int num_blocks = ne / 128;
+    cpy_f32_turbo<block_turbo4_0, quantize_f32_turbo4_0_block, 1>
+        <<<num_blocks, 1, 0, stream>>>(cx, cdst, ne, ne00, ne01, ne02, nb00, nb01, nb02, nb03,
+                                       ne10, ne11, ne12, nb10, nb11, nb12, nb13,
+                                       cdst_indirect, graph_cpynode_index++);
+}
+
+static void ggml_cpy_f32_turbo3_0_cuda(
+        const char * cx, char * cdst, const int ne,
+        const int ne00, const int ne01, const int ne02,
+        const int nb00, const int nb01, const int nb02, const int nb03,
+        const int ne10, const int ne11, const int ne12,
+        const int nb10, const int nb11, const int nb12, const int nb13,
+        cudaStream_t stream, char ** cdst_indirect, int & graph_cpynode_index) {
+    GGML_ASSERT(ne % 128 == 0);
+    const int num_blocks = ne / 128;
+    cpy_f32_turbo<block_turbo3_0, quantize_f32_turbo3_0_group, 4>
+        <<<num_blocks, 1, 0, stream>>>(cx, cdst, ne, ne00, ne01, ne02, nb00, nb01, nb02, nb03,
+                                       ne10, ne11, ne12, nb10, nb11, nb12, nb13,
+                                       cdst_indirect, graph_cpynode_index++);
+}
+
 void ggml_cuda_cpy(ggml_backend_cuda_context & ctx, const ggml_tensor * src0, ggml_tensor * src1, bool disable_indirection_for_this_node) {
     const int64_t ne = ggml_nelements(src0);
     GGML_ASSERT(ne == ggml_nelements(src1));
@@ -589,6 +655,10 @@ void ggml_cuda_cpy(ggml_backend_cuda_context & ctx, const ggml_tensor * src0, gg
         ggml_cpy_q8_0_f16_cuda(src0_ddc, src1_ddc, ne, ne00, ne01, ne02, nb00, nb01, nb02, nb03, ne10, ne11, ne12, nb10, nb11, nb12, nb13, main_stream, dest_ptrs_d, graph_cpynode_index);
     } else if (src0->type == GGML_TYPE_F32 && src1->type == GGML_TYPE_Q4_0) {
         ggml_cpy_f32_q4_0_cuda(src0_ddc, src1_ddc, ne, ne00, ne01, ne02, nb00, nb01, nb02, nb03, ne10, ne11, ne12, nb10, nb11, nb12, nb13, main_stream, dest_ptrs_d, graph_cpynode_index);
+    } else if (src0->type == GGML_TYPE_F32 && src1->type == GGML_TYPE_TURBO4_0) {
+        ggml_cpy_f32_turbo4_0_cuda(src0_ddc, src1_ddc, ne, ne00, ne01, ne02, nb00, nb01, nb02, nb03, ne10, ne11, ne12, nb10, nb11, nb12, nb13, main_stream, dest_ptrs_d, graph_cpynode_index);
+    } else if (src0->type == GGML_TYPE_F32 && src1->type == GGML_TYPE_TURBO3_0) {
+        ggml_cpy_f32_turbo3_0_cuda(src0_ddc, src1_ddc, ne, ne00, ne01, ne02, nb00, nb01, nb02, nb03, ne10, ne11, ne12, nb10, nb11, nb12, nb13, main_stream, dest_ptrs_d, graph_cpynode_index);
     } else if (src0->type == GGML_TYPE_Q4_0 && src1->type == GGML_TYPE_F32) {
         ggml_cpy_q4_0_f32_cuda(src0_ddc, src1_ddc, ne, ne00, ne01, ne02,
             nb00, nb01, nb02, nb03, ne10, ne11, ne12, nb10, nb11, nb12, nb13, main_stream, dest_ptrs_d, graph_cpynode_index);
@@ -690,6 +760,10 @@ void* ggml_cuda_cpy_fn(const ggml_tensor * src0, ggml_tensor * src1) {
         return (void*) cpy_q_f32<cpy_blck_q8_0_f16, QK8_0>;
     } else if (src0->type == GGML_TYPE_F32 && src1->type == GGML_TYPE_Q4_0) {
         return (void*) cpy_f32_q<cpy_blck_f32_q4_0, QK4_0>;
+    } else if (src0->type == GGML_TYPE_F32 && src1->type == GGML_TYPE_TURBO4_0) {
+        return (void*) cpy_f32_turbo<block_turbo4_0, quantize_f32_turbo4_0_block, 1>;
+    } else if (src0->type == GGML_TYPE_F32 && src1->type == GGML_TYPE_TURBO3_0) {
+        return (void*) cpy_f32_turbo<block_turbo3_0, quantize_f32_turbo3_0_group, 4>;
     } else if (src0->type == GGML_TYPE_Q4_0 && src1->type == GGML_TYPE_F32) {
         return (void*) cpy_q_f32<cpy_blck_q_f32<dequantize_q4_0, QK4_0>, QK4_0>;
     } else if (src0->type == GGML_TYPE_Q4_0 && src1->type == GGML_TYPE_F16) {
