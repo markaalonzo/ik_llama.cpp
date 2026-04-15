@@ -202,19 +202,17 @@ void quantize_row_turbo4_0_ref(const float * GGML_RESTRICT x, block_turbo4_0 * G
         for (int j = 0; j < 128; j++) rot[j] = src[j] * inv_norm;
         turbo_rotate_forward(rot);
 
-        /* Step 3: 4-bit quantize */
+        /* Step 3: 4-bit quantize, accumulating reconstruction norm inline */
+        float recon_sq = 0.0f;
         for (int j = 0; j < 128; j += 2) {
-            uint8_t idx0 = (uint8_t)nearest_4bit(rot[j]);
-            uint8_t idx1 = (uint8_t)nearest_4bit(rot[j + 1]);
-            y[block].qs[j / 2] = (idx1 << 4) | idx0;
+            int idx0 = nearest_4bit(rot[j]);
+            int idx1 = nearest_4bit(rot[j + 1]);
+            y[block].qs[j / 2] = (uint8_t)((idx1 << 4) | idx0);
+            recon_sq += CENTROIDS_4BIT[idx0] * CENTROIDS_4BIT[idx0]
+                      + CENTROIDS_4BIT[idx1] * CENTROIDS_4BIT[idx1];
         }
 
         /* Step 4: norm correction */
-        float recon_sq = 0.0f;
-        for (int j = 0; j < 128; j++) {
-            uint8_t idx = (j & 1) ? (y[block].qs[j / 2] >> 4) : (y[block].qs[j / 2] & 0xF);
-            recon_sq += CENTROIDS_4BIT[idx] * CENTROIDS_4BIT[idx];
-        }
         float recon_norm = sqrtf(recon_sq);
         y[block].norm = GGML_FP32_TO_FP16((recon_norm > 1e-10f) ? norm / recon_norm : norm);
     }

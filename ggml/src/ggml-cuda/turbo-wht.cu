@@ -21,10 +21,6 @@ static __global__ void k_turbo_wht(
 
     __shared__ float buf[128];
 
-    // Kernel is launched with exactly 128 threads per block (see launch
-    // config below). All threads participate in load/store; the butterfly
-    // only uses the first 64 threads (each processes one pair).
-
     // Load and apply first sign flip
     buf[threadIdx.x] = src[offset + threadIdx.x] * s_first[threadIdx.x];
     __syncthreads();

@@ -1805,8 +1805,7 @@ ggml_tensor * llm_build_context::llm_build_kv(
     // by the quantize kernel (quantize_f32_turbo*_0_*) when they are written
     // into the turbo KV cache via ggml_cpy; applying ggml_turbo_wht here as
     // well would rotate them a second time and break attention.
-    const bool turbo_k = (kv.type_k == GGML_TYPE_TURBO3_0 || kv.type_k == GGML_TYPE_TURBO4_0);
-    if (turbo_k) {
+    if (kv.type_k == GGML_TYPE_TURBO3_0 || kv.type_k == GGML_TYPE_TURBO4_0) {
         q_cur = ggml_turbo_wht(ctx, q_cur, 0);
         cb(q_cur, "Qcur_turbo_wht", il);
     }

@@ -83,16 +83,13 @@ void quantize_f32_turbo4_0_block(const float * src, block_turbo4_0 * dst) {
     for (int j = 0; j < 128; j++) x[j] = src[j] * inv_norm;
     turbo_rotate_forward_cuda(x);
 
+    float recon_sq = 0.0f;
     for (int j = 0; j < 128; j += 2) {
         uint8_t idx0 = turbo_find_nearest_4bit(x[j]);
         uint8_t idx1 = turbo_find_nearest_4bit(x[j + 1]);
         dst->qs[j / 2] = (idx1 << 4) | idx0;
-    }
-
-    float recon_sq = 0.0f;
-    for (int j = 0; j < 128; j++) {
-        uint8_t idx = (j & 1) ? (dst->qs[j / 2] >> 4) : (dst->qs[j / 2] & 0xF);
-        recon_sq += d_turbo_centroids_4bit[idx] * d_turbo_centroids_4bit[idx];
+        recon_sq += d_turbo_centroids_4bit[idx0] * d_turbo_centroids_4bit[idx0]
+                  + d_turbo_centroids_4bit[idx1] * d_turbo_centroids_4bit[idx1];
     }
     float recon_norm = sqrtf(recon_sq);
     dst->norm = __float2half((recon_norm > 1e-10f) ? norm / recon_norm : norm);

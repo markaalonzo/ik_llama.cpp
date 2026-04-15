@@ -659,8 +659,6 @@ struct HelperIQ4nl final : public BaseHelper {
 };
 
 // TurboQuant helpers: dequantize turbo blocks to float, then load into SIMD.
-// Not SIMD-optimized yet — correct first, fast later.
-// Lloyd-Max codebooks (must match ggml-turbo-quant.c)
 static const float turbo_centroids_3bit[] = TURBO_CENTROIDS_3BIT_INIT;
 static const float turbo_centroids_4bit[] = TURBO_CENTROIDS_4BIT_INIT;
 
