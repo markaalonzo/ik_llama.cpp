@@ -1524,7 +1524,17 @@ llm_expert_gating_func_type   gating_op,
 }
 
 // TurboQuant: inverse FWHT on the FA output when V uses a turbo KV cache type.
-// Paired with forward rotation applied on V before quantize-on-write.
+//
+// Invariant (when kv.type_k or kv.type_v is a TURBO*_0 type):
+//   - Q: forward-rotated by ggml_turbo_wht(q_cur, 0) at graph level in llm_build_kv.
+//   - K, V: rotated exactly once inside the quantize kernel (quantize_f32_turbo*_0_*)
+//          when ggml_cpy writes them into the turbo cache. Graph-level ggml_turbo_wht
+//          on K/V is a BUG — it double-rotates and breaks Q.K invariance.
+//   - FA output: inverse-rotated by this helper to recover softmax(Q.K)*V in the
+//          original (un-rotated) space.
+// New architecture-specific graph builders that bypass llm_build_kv (e.g. parallel
+// graph builders that use ggml_cpy directly) must replicate the Q forward-rotation
+// or be added to the hard-reject list in llama_kv_cache_init.
 static inline ggml_tensor * apply_turbo_wht_inv_v(
         ggml_context * ctx, ggml_tensor * cur,
         const llama_kv_cache & kv, const llm_build_cb & cb, int il) {

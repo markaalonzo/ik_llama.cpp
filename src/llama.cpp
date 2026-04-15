@@ -762,11 +762,17 @@ static bool llama_kv_cache_init(
         return t == GGML_TYPE_TURBO3_0 || t == GGML_TYPE_TURBO4_0;
     };
     if (is_turbo(type_k) || is_turbo(type_v)) {
+        // TurboQuant compatibility contract for architecture builders:
+        //   - The standard path (llm_build_kv + llm_build_kqv) applies ggml_turbo_wht
+        //     forward-rotation to Q at graph level; K and V are rotated inside the
+        //     quantize kernel when ggml_cpy writes them into the turbo cache. The
+        //     inverse rotation on FA output is applied by apply_turbo_wht_inv_v.
+        //   - Any architecture-specific graph builder that writes K/V directly (like
+        //     build_gemma4_graph_parallel does with ggml_cpy) must either replicate
+        //     the Q forward-rotation in that builder, or be added to the hard-reject
+        //     list below. Skipping both silently corrupts attention because cached K
+        //     ends up rotated while Q is not, breaking Q.K invariance.
         if (model.arch == LLM_ARCH_GEMMA4) {
-            // build_gemma4_graph_parallel writes Kcur/Vcur with a direct ggml_cpy and does
-            // not apply the forward FWHT rotation that the standard llm_build_kv path does.
-            // Allowing turbo KV there would store un-rotated values and silently corrupt
-            // attention output via the inverse WHT on FA output. Reject until parity lands.
             LLAMA_LOG_ERROR("%s: turbo KV cache types (turbo3_0, turbo4_0) are not supported "
                             "on the Gemma4 architecture. Use --cache-type-k/--cache-type-v q8_0 "
                             "(or another non-turbo type) with Gemma4 models.\n", __func__);
