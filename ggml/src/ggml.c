@@ -6312,6 +6312,7 @@ struct ggml_tensor * ggml_turbo_wht(
         int                   direction) {
 
     GGML_ASSERT(a->type == GGML_TYPE_F32);
+    GGML_ASSERT(ggml_is_contiguous(a));
     GGML_ASSERT(a->ne[0] % 128 == 0);
     GGML_ASSERT(direction == 0 || direction == 1);
 

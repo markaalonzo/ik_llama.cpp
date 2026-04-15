@@ -140,6 +140,7 @@ llama_test(test-tokenizer-0 NAME test-tokenizer-0-starcoder         ARGS ${CMAKE
 
 if (LLAMA_LLGUIDANCE)
     llama_target_and_test(test-grammar-llguidance.cpp ARGS ${CMAKE_CURRENT_SOURCE_DIR}/../models/ggml-vocab-llama-bpe.gguf)
+    llama_target_and_test(test-turbo-quant.c)
 endif ()
 
 if (NOT WIN32)

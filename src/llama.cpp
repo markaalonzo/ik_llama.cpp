@@ -767,8 +767,9 @@ static bool llama_kv_cache_init(
             // not apply the forward FWHT rotation that the standard llm_build_kv path does.
             // Allowing turbo KV there would store un-rotated values and silently corrupt
             // attention output via the inverse WHT on FA output. Reject until parity lands.
-            LLAMA_LOG_ERROR("%s: turbo KV cache types are not yet supported for GEMMA4; "
-                            "forward FWHT is missing in build_gemma4_graph_parallel\n", __func__);
+            LLAMA_LOG_ERROR("%s: turbo KV cache types (turbo3_0, turbo4_0) are not supported "
+                            "on the Gemma4 architecture. Use --cache-type-k/--cache-type-v q8_0 "
+                            "(or another non-turbo type) with Gemma4 models.\n", __func__);
             return false;
         }
         for (int i = 0; i < (int) n_layer; ++i) {
