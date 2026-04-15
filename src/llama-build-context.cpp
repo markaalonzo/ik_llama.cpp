@@ -1801,21 +1801,14 @@ ggml_tensor * llm_build_context::llm_build_kv(
         v_cur = ggml_hadamard(ctx, v_cur, hparams.n_embd_head_v(il));
     }
 
-    // TurboQuant: apply FWHT rotation when turbo KV cache types are active.
-    // Forward rotation (direction=0) on K/V before quantize-on-write.
-    // Q gets the same rotation so Q·K dot products are preserved.
+    // TurboQuant: forward rotation on Q only. K and V are rotated internally
+    // by the quantize kernel (quantize_f32_turbo*_0_*) when they are written
+    // into the turbo KV cache via ggml_cpy; applying ggml_turbo_wht here as
+    // well would rotate them a second time and break attention.
     const bool turbo_k = (kv.type_k == GGML_TYPE_TURBO3_0 || kv.type_k == GGML_TYPE_TURBO4_0);
-    const bool turbo_v = (kv.type_v == GGML_TYPE_TURBO3_0 || kv.type_v == GGML_TYPE_TURBO4_0);
     if (turbo_k) {
         q_cur = ggml_turbo_wht(ctx, q_cur, 0);
-        if (k_cur) {
-            k_cur = ggml_turbo_wht(ctx, k_cur, 0);
-            cb(k_cur, "Kcur_turbo_wht", il);
-        }
         cb(q_cur, "Qcur_turbo_wht", il);
-    }
-    if (turbo_v && v_cur) {
-        v_cur = ggml_turbo_wht(ctx, v_cur, 0);
     }
 
     // these nodes are added to the graph together so that they are not reordered
