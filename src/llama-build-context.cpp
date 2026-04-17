@@ -2069,8 +2069,6 @@ ggml_tensor * llm_build_context::build_output(llama_context & lctx, ggml_context
     return cur;
 }
 
-static inline size_t llama_model_max_nodes(const llama_model & model, int n_tokens) { return model.max_nodes(n_tokens); }
-
 ggml_cgraph * llm_build_context::llama_build_graph_defrag(llama_context & lctx, const std::vector<uint32_t> & ids) {
     llama_batch dummy;
     dummy.n_tokens = 0;
