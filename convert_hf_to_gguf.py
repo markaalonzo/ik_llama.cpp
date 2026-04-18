@@ -2304,7 +2304,14 @@ class Qwen3_5MoeTextModel(Qwen3NextModel):
         self.gguf_writer.add_rope_dimension_count(int(head_dim * partial))
 
         if (mrope_section := rope_params.get("mrope_section")) is not None:
-            self.gguf_writer.add_rope_dimension_sections(mrope_section)
+            # ggml_rope_multi expects exactly GGML_MROPE_SECTIONS (=4) entries
+            # and llama-hparams.h declares std::array<int, 4>. HF ships 3 dims
+            # for 3D mRoPE (temporal/height/width); pad the 4th with 0, matching
+            # upstream llama.cpp's convention (convert_hf_to_gguf.py:1147).
+            mrope_section = list(mrope_section)
+            while len(mrope_section) < 4:
+                mrope_section.append(0)
+            self.gguf_writer.add_rope_dimension_sections(mrope_section[:4])
 
         # Gated DeltaNet (linear-attention) hparams the C++ QWEN35MOE hparams
         # loader requires: ssm.{conv_kernel,state_size,group_count,time_step_rank,inner_size}.
