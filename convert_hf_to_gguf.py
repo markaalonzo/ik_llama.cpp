@@ -457,7 +457,13 @@ class Model:
     @staticmethod
     def load_hparams(dir_model: Path):
         with open(dir_model / "config.json", "r", encoding="utf-8") as f:
-            return json.load(f)
+            config = json.load(f)
+        # VLM configs (e.g., Qwen3-VL, Qwen3.5-MoE) nest the language model
+        # hparams under "text_config". Flatten it so downstream lookups for
+        # num_hidden_layers, hidden_size, etc. hit the root dict.
+        if "text_config" in config and isinstance(config["text_config"], dict):
+            config = {**config, **config["text_config"]}
+        return config
 
     @classmethod
     def register(cls, *names: str) -> Callable[[AnyModel], AnyModel]:
@@ -594,6 +600,9 @@ class Model:
         if chkhsh == "e636dc30a262dcc0d8c323492e32ae2b70728f4df7dfe9737d9f920a282b8aea":
             # ref: https://huggingface.co/Qwen/Qwen1.5-7B
             res = "qwen2"
+        if chkhsh == "d30d75d9059f1aa2c19359de71047b3ae408c70875e8a3ccf8c5fba56c9d8af4":
+            # ref: https://huggingface.co/Qwen/Qwen3.6-35B-A3B (shared with Qwen3.5)
+            res = "qwen35"
         if chkhsh == "b6dc8df998e1cfbdc4eac8243701a65afe638679230920b50d6f17d81c098166":
             # ref: https://huggingface.co/allenai/OLMo-1.7-7B-hf
             res = "olmo"
@@ -2253,6 +2262,27 @@ class Qwen3Model(Qwen2Model):
 @Model.register("Qwen3MoeForCausalLM")
 class Qwen3MoeModel(Qwen2MoeModel):
     model_arch = gguf.MODEL_ARCH.QWEN3MOE
+
+
+@Model.register("Qwen3NextForCausalLM")
+class Qwen3NextModel(Qwen2MoeModel):
+    model_arch = gguf.MODEL_ARCH.QWEN3NEXT
+
+
+@Model.register(
+    "Qwen3_5ForConditionalGeneration",
+    "Qwen3_5ForCausalLM",
+)
+class Qwen3_5TextModel(Qwen2Model):
+    model_arch = gguf.MODEL_ARCH.QWEN35
+
+
+@Model.register(
+    "Qwen3_5MoeForConditionalGeneration",
+    "Qwen3_5MoeForCausalLM",
+)
+class Qwen3_5MoeTextModel(Qwen3NextModel):
+    model_arch = gguf.MODEL_ARCH.QWEN35MOE
 
 
 @Model.register("Ernie4_5_ForCausalLM", "Ernie4_5ForCausalLM")
