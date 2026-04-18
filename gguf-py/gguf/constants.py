@@ -99,6 +99,7 @@ class Keys:
         DECODER_START_TOKEN_ID            = "{arch}.decoder_start_token_id"
         ATTN_LOGIT_SOFTCAPPING            = "{arch}.attn_logit_softcapping"
         FINAL_LOGIT_SOFTCAPPING           = "{arch}.final_logit_softcapping"
+        FULL_ATTENTION_INTERVAL           = "{arch}.full_attention_interval"
         ROUTER_LOGIT_SOFTCAPPING          = "{arch}.router_logit_softcapping"
 
     class Attention:
@@ -120,6 +121,7 @@ class Keys:
 
     class Rope:
         DIMENSION_COUNT          = "{arch}.rope.dimension_count"
+        DIMENSION_SECTIONS       = "{arch}.rope.dimension_sections"
         FREQ_BASE                = "{arch}.rope.freq_base"
         SCALING_TYPE             = "{arch}.rope.scaling.type"
         SCALING_FACTOR           = "{arch}.rope.scaling.factor"
@@ -142,6 +144,8 @@ class Keys:
         INNER_SIZE     = "{arch}.ssm.inner_size"
         STATE_SIZE     = "{arch}.ssm.state_size"
         TIME_STEP_RANK = "{arch}.ssm.time_step_rank"
+        GROUP_COUNT    = "{arch}.ssm.group_count"
+        DT_B_C_RMS     = "{arch}.ssm.dt_b_c_rms"
 
     class Tokenizer:
         MODEL                = "tokenizer.ggml.model"

@@ -2284,6 +2284,47 @@ class Qwen3_5TextModel(Qwen2Model):
 class Qwen3_5MoeTextModel(Qwen3NextModel):
     model_arch = gguf.MODEL_ARCH.QWEN35MOE
 
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+
+        # Qwen3.5/3.6 nest rope params inside a "rope_parameters" dict; the
+        # top-level rope_theta lookup in the base class misses them.
+        rope_params = self.hparams.get("rope_parameters") or {}
+        if (rope_theta := rope_params.get("rope_theta", self.hparams.get("rope_theta"))) is not None:
+            self.gguf_writer.add_rope_freq_base(rope_theta)
+
+        partial = rope_params.get(
+            "partial_rotary_factor",
+            self.hparams.get("partial_rotary_factor", 1.0),
+        )
+        head_dim = self.hparams.get(
+            "head_dim",
+            self.hparams["hidden_size"] // self.hparams["num_attention_heads"],
+        )
+        self.gguf_writer.add_rope_dimension_count(int(head_dim * partial))
+
+        if (mrope_section := rope_params.get("mrope_section")) is not None:
+            self.gguf_writer.add_rope_dimension_sections(mrope_section)
+
+        # Gated DeltaNet (linear-attention) hparams the C++ QWEN35MOE hparams
+        # loader requires: ssm.{conv_kernel,state_size,group_count,time_step_rank,inner_size}.
+        if (conv_kernel := self.hparams.get("linear_conv_kernel_dim")) is not None:
+            self.gguf_writer.add_ssm_conv_kernel(conv_kernel)
+        if (state_size := self.hparams.get("linear_key_head_dim")) is not None:
+            self.gguf_writer.add_ssm_state_size(state_size)
+        if (n_k_heads := self.hparams.get("linear_num_key_heads")) is not None:
+            self.gguf_writer.add_ssm_group_count(n_k_heads)
+        if (n_v_heads := self.hparams.get("linear_num_value_heads")) is not None:
+            self.gguf_writer.add_ssm_time_step_rank(n_v_heads)
+            if (v_head_dim := self.hparams.get("linear_value_head_dim")) is not None:
+                self.gguf_writer.add_ssm_inner_size(v_head_dim * n_v_heads)
+
+        # Full-attention interval (every Nth layer is full-attn; the rest are
+        # linear_attn). Matches C++ hparams reader at llama-hparams.cpp:508.
+        self.gguf_writer.add_full_attention_interval(
+            self.hparams.get("full_attention_interval", 4)
+        )
+
     def modify_tensors(
         self, data_torch: Tensor, name: str, bid: int | None
     ) -> Iterable[tuple[str, Tensor]]:
