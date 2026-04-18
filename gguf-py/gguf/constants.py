@@ -308,6 +308,10 @@ class MODEL_TENSOR(IntEnum):
     SSM_A                = auto()
     SSM_D                = auto()
     SSM_OUT              = auto()
+    SSM_NORM             = auto()  # qwen3.5/qwen3.6 linear_attn RMS norm
+    SSM_BETA             = auto()  # qwen3.5/qwen3.6 in_proj_b gate
+    SSM_ALPHA            = auto()  # qwen3.5/qwen3.6 in_proj_a gate
+    ATTN_GATE            = auto()  # qwen3-next/qwen3.5 linear_attn z-gate (in_proj_z)
     ATTN_Q_A             = auto()
     ATTN_Q_B             = auto()
     ATTN_KV_A_MQA        = auto()
@@ -461,6 +465,10 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.SSM_A:                "blk.{bid}.ssm_a",
     MODEL_TENSOR.SSM_D:                "blk.{bid}.ssm_d",
     MODEL_TENSOR.SSM_OUT:              "blk.{bid}.ssm_out",
+    MODEL_TENSOR.SSM_NORM:             "blk.{bid}.ssm_norm",
+    MODEL_TENSOR.SSM_BETA:             "blk.{bid}.ssm_beta",
+    MODEL_TENSOR.SSM_ALPHA:            "blk.{bid}.ssm_alpha",
+    MODEL_TENSOR.ATTN_GATE:            "blk.{bid}.attn_gate",
     MODEL_TENSOR.ATTN_Q_A:             "blk.{bid}.attn_q_a",
     MODEL_TENSOR.ATTN_Q_B:             "blk.{bid}.attn_q_b",
     MODEL_TENSOR.ATTN_KV_A_MQA:        "blk.{bid}.attn_kv_a_mqa",
@@ -824,19 +832,22 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.OUTPUT_NORM,
         MODEL_TENSOR.OUTPUT,
         MODEL_TENSOR.ATTN_NORM,
+        MODEL_TENSOR.ATTN_POST_NORM,
         MODEL_TENSOR.ATTN_Q,
         MODEL_TENSOR.ATTN_Q_NORM,
         MODEL_TENSOR.ATTN_K,
         MODEL_TENSOR.ATTN_K_NORM,
         MODEL_TENSOR.ATTN_V,
         MODEL_TENSOR.ATTN_OUT,
-        MODEL_TENSOR.ATTN_QKV,
-        MODEL_TENSOR.SSM_IN,
+        MODEL_TENSOR.ATTN_QKV,   # linear_attn in_proj_qkv
+        MODEL_TENSOR.ATTN_GATE,  # linear_attn in_proj_z
         MODEL_TENSOR.SSM_CONV1D,
         MODEL_TENSOR.SSM_DT,
         MODEL_TENSOR.SSM_A,
+        MODEL_TENSOR.SSM_ALPHA,  # linear_attn in_proj_a
+        MODEL_TENSOR.SSM_BETA,   # linear_attn in_proj_b
+        MODEL_TENSOR.SSM_NORM,   # linear_attn norm
         MODEL_TENSOR.SSM_OUT,
-        MODEL_TENSOR.FFN_NORM,
         MODEL_TENSOR.FFN_GATE_INP,
         MODEL_TENSOR.FFN_GATE_INP_SHEXP,
         MODEL_TENSOR.FFN_GATE_EXP,

@@ -2300,6 +2300,20 @@ class Qwen3_5MoeTextModel(Qwen3NextModel):
         if name.startswith("mtp."):
             return []
 
+        # Linear-attention (Gated DeltaNet) tensor transforms.
+        if ".linear_attn." in name:
+            if name.endswith(".A_log"):
+                # GGML stores A as -exp(A_log); apply the transform here so the
+                # kernel can use it directly.
+                data_torch = -torch.exp(data_torch)
+            elif name.endswith(".dt_bias"):
+                # Rename dt_bias -> dt_proj.bias so the standard SSM_DT mapping
+                # picks it up as a .bias suffix and emits blk.N.ssm_dt.bias.
+                name = name.rpartition(".dt_bias")[0] + ".dt_proj.bias"
+            elif name.endswith(".conv1d.weight"):
+                # conv1d weight ships as (C, 1, K); ggml_ssm_conv expects (C, K).
+                data_torch = data_torch.squeeze()
+
         return super().modify_tensors(data_torch, name, bid)
 
 

@@ -127,6 +127,7 @@ class TensorNameMap:
             "transformer.blocks.{bid}.attn.Wqkv",                                  # mpt
             "transformer.blocks.{bid}.norm_attn_norm.attn.Wqkv",                   # dbrx
             "transformer.h.{bid}.self_attention.query_key_value",                  # falcon
+            "model.layers.{bid}.linear_attn.in_proj_qkv",                          # qwen3.5 / qwen3.6 linear_attn QKV
             "h.{bid}.self_attention.query_key_value",                              # bloom
             "language_model.encoder.layers.{bid}.self_attention.query_key_value",  # persimmon
             "model.layers.{bid}.self_attn.query_key_value",                        # persimmon
@@ -421,6 +422,7 @@ class TensorNameMap:
         MODEL_TENSOR.SSM_CONV1D: (
             "model.layers.{bid}.conv1d",
             "backbone.layers.{bid}.mixer.conv1d",
+            "model.layers.{bid}.linear_attn.conv1d",  # qwen3.5 / qwen3.6
         ),
 
         MODEL_TENSOR.SSM_X: (
@@ -431,11 +433,13 @@ class TensorNameMap:
         MODEL_TENSOR.SSM_DT: (
             "model.layers.{bid}.dt_proj",
             "backbone.layers.{bid}.mixer.dt_proj",
+            "model.layers.{bid}.linear_attn.dt_proj",  # qwen3.5 / qwen3.6 (renamed from dt_bias in modify_tensors)
         ),
 
         MODEL_TENSOR.SSM_A: (
             "model.layers.{bid}.A_log",
             "backbone.layers.{bid}.mixer.A_log",
+            "model.layers.{bid}.linear_attn.A_log",  # qwen3.5 / qwen3.6
         ),
 
         MODEL_TENSOR.SSM_D: (
@@ -446,6 +450,23 @@ class TensorNameMap:
         MODEL_TENSOR.SSM_OUT: (
             "model.layers.{bid}.out_proj",
             "backbone.layers.{bid}.mixer.out_proj",
+            "model.layers.{bid}.linear_attn.out_proj",  # qwen3.5 / qwen3.6
+        ),
+
+        MODEL_TENSOR.SSM_NORM: (
+            "model.layers.{bid}.linear_attn.norm",  # qwen3.5 / qwen3.6
+        ),
+
+        MODEL_TENSOR.SSM_BETA: (
+            "model.layers.{bid}.linear_attn.in_proj_b",  # qwen3.5 / qwen3.6
+        ),
+
+        MODEL_TENSOR.SSM_ALPHA: (
+            "model.layers.{bid}.linear_attn.in_proj_a",  # qwen3.5 / qwen3.6
+        ),
+
+        MODEL_TENSOR.ATTN_GATE: (
+            "model.layers.{bid}.linear_attn.in_proj_z",  # qwen3.5 / qwen3.6 z-gate
         ),
 
         MODEL_TENSOR.ATTN_Q_A: (
