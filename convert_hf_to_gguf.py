@@ -2284,6 +2284,24 @@ class Qwen3_5TextModel(Qwen2Model):
 class Qwen3_5MoeTextModel(Qwen3NextModel):
     model_arch = gguf.MODEL_ARCH.QWEN35MOE
 
+    def modify_tensors(
+        self, data_torch: Tensor, name: str, bid: int | None
+    ) -> Iterable[tuple[str, Tensor]]:
+        # VLM wrapper: skip the vision tower. The 27-layer ViT gets converted
+        # in a separate mmproj pass (TODO: port Qwen3VLVisionModel).
+        if name.startswith("model.visual."):
+            return []
+        # Strip the VLM language-model prefix so the standard tensor mapping
+        # table (which expects "model.layers.N.*") applies.
+        if name.startswith("model.language_model."):
+            name = name.replace("language_model.", "", 1)
+        # Multi-token-prediction head. Runtime QWEN35MOE MTP wiring is a follow-up;
+        # for now drop these tensors so the text model converts cleanly.
+        if name.startswith("mtp."):
+            return []
+
+        return super().modify_tensors(data_torch, name, bid)
+
 
 @Model.register("Ernie4_5_ForCausalLM", "Ernie4_5ForCausalLM")
 class Ernie4_5Model(Model):
