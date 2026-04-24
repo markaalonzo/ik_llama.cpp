@@ -2280,86 +2280,24 @@ class Qwen3MoeModel(Qwen2MoeModel):
 class Qwen3NextModel(Qwen2MoeModel):
     model_arch = gguf.MODEL_ARCH.QWEN3NEXT
 
-
-@Model.register(
-    "Qwen3_5ForConditionalGeneration",
-    "Qwen3_5ForCausalLM",
-)
-class Qwen3_5TextModel(Qwen2Model):
-    model_arch = gguf.MODEL_ARCH.QWEN35
-
-
-@Model.register(
-    "Qwen3_5MoeForConditionalGeneration",
-    "Qwen3_5MoeForCausalLM",
-)
-class Qwen3_5MoeTextModel(Qwen3NextModel):
-    model_arch = gguf.MODEL_ARCH.QWEN35MOE
-
-    @staticmethod
-    def _reorder_v_heads(tensor: Tensor, dim: int, num_k_heads: int, num_v_per_k: int, head_dim: int) -> Tensor:
-        """Reorder V heads from grouped-by-K-head order to tiled order along `dim`.
-
-        HF stores: [G0_v0..v{r-1}, G1_v0..v{r-1}, ...]  where r = num_v_per_k
-        ggml wants: [G0_v0, G1_v0, ..., G0_v1, G1_v1, ...]
-        See upstream llama.cpp PR 19468 / _LinearAttentionVReorderBase.
-        """
-        shape = list(tensor.shape)
-        if dim < 0:
-            dim += len(shape)
-        new_shape = shape[:dim] + [num_k_heads, num_v_per_k, head_dim] + shape[dim + 1:]
-        tensor = tensor.reshape(*new_shape)
-        perm = list(range(len(new_shape)))
-        perm[dim], perm[dim + 1] = perm[dim + 1], perm[dim]
-        return tensor.permute(*perm).contiguous().reshape(*shape)
-
-    def set_gguf_parameters(self):
-        super().set_gguf_parameters()
-
-        # Qwen3.5/3.6 nest rope params inside a "rope_parameters" dict; the
-        # top-level rope_theta lookup in the base class misses them.
-        rope_params = self.hparams.get("rope_parameters") or {}
-        if (rope_theta := rope_params.get("rope_theta", self.hparams.get("rope_theta"))) is not None:
-            self.gguf_writer.add_rope_freq_base(rope_theta)
-
-        partial = rope_params.get(
-            "partial_rotary_factor",
-            self.hparams.get("partial_rotary_factor", 1.0),
-        )
-        head_dim = self.hparams.get(
-            "head_dim",
-            self.hparams["hidden_size"] // self.hparams["num_attention_heads"],
-        )
-        self.gguf_writer.add_rope_dimension_count(int(head_dim * partial))
-
-        if (mrope_section := rope_params.get("mrope_section")) is not None:
-            # ggml_rope_multi expects exactly GGML_MROPE_SECTIONS (=4) entries
-            # and llama-hparams.h declares std::array<int, 4>. HF ships 3 dims
-            # for 3D mRoPE (temporal/height/width); pad the 4th with 0, matching
-            # upstream llama.cpp's convention (convert_hf_to_gguf.py:1147).
-            mrope_section = list(mrope_section)
-            while len(mrope_section) < 4:
-                mrope_section.append(0)
-            self.gguf_writer.add_rope_dimension_sections(mrope_section[:4])
-
-        # Gated DeltaNet (linear-attention) hparams the C++ QWEN35MOE hparams
-        # loader requires: ssm.{conv_kernel,state_size,group_count,time_step_rank,inner_size}.
-        if (conv_kernel := self.hparams.get("linear_conv_kernel_dim")) is not None:
-            self.gguf_writer.add_ssm_conv_kernel(conv_kernel)
-        if (state_size := self.hparams.get("linear_key_head_dim")) is not None:
-            self.gguf_writer.add_ssm_state_size(state_size)
-        if (n_k_heads := self.hparams.get("linear_num_key_heads")) is not None:
-            self.gguf_writer.add_ssm_group_count(n_k_heads)
-        if (n_v_heads := self.hparams.get("linear_num_value_heads")) is not None:
-            self.gguf_writer.add_ssm_time_step_rank(n_v_heads)
-            if (v_head_dim := self.hparams.get("linear_value_head_dim")) is not None:
-                self.gguf_writer.add_ssm_inner_size(v_head_dim * n_v_heads)
-
-        # Full-attention interval (every Nth layer is full-attn; the rest are
-        # linear_attn). Matches C++ hparams reader at llama-hparams.cpp:508.
-        self.gguf_writer.add_full_attention_interval(
-            self.hparams.get("full_attention_interval", 4)
-        )
+    def __init__(self, dir_model: Path, ftype: gguf.LlamaFileType, fname_out: Path, **kwargs):
+        super().__init__(dir_model, ftype, fname_out, **kwargs)
+        # Qwen-Coder-Next config has num_experts=512 (total), but we need per-block count.
+        # Scan the safetensors to find the actual max expert index per block.
+        if "num_experts" in self.hparams:
+            max_eid = -1
+            from safetensors import safe_open
+            for part_name in self.part_names:
+                fpath = self.dir_model / part_name
+                with safe_open(fpath, framework="pt", device="cpu") as f:
+                    for key in f.keys():
+                        m = re.search(r"\.experts\.(\d+)\.", key)
+                        if m:
+                            eid = int(m.group(1))
+                            if eid > max_eid:
+                                max_eid = eid
+            if max_eid >= 0:
+                self.hparams["num_experts"] = max_eid + 1
 
     def modify_tensors(
         self, data_torch: Tensor, name: str, bid: int | None
@@ -2397,7 +2335,20 @@ class Qwen3_5MoeTextModel(Qwen3NextModel):
                 head_v_dim = self.hparams["linear_value_head_dim"]
                 num_v_per_k = num_v_heads // num_k_heads
 
-                if name.endswith(".linear_attn.in_proj_qkv.weight"):
+                if name.endswith(".linear_attn.in_proj_qkvz.weight"):
+                    # Combined QKVZ tensor: [n_q + n_k + n_v + n_z, hidden_size]
+                    n_q = head_k_dim * num_k_heads
+                    n_k = head_k_dim * num_k_heads
+                    n_v = head_v_dim * num_v_heads
+                    n_z = data_torch.shape[1]  # hidden_size
+                    q = data_torch[:n_q]
+                    k = data_torch[n_q:n_q + n_k]
+                    v = data_torch[n_q + n_k:n_q + n_k + n_v]
+                    z = data_torch[n_q + n_k + n_z:]
+                    v = self._reorder_v_heads(v, 0, num_k_heads, num_v_per_k, head_v_dim)
+                    # Combine back and let map_tensor_name handle it as ATTN_QKV
+                    data_torch = torch.cat([q, k, v, z], dim=0)
+                elif name.endswith(".linear_attn.in_proj_qkv.weight"):
                     q_dim = head_k_dim * num_k_heads
                     k_dim = head_k_dim * num_k_heads
                     q = data_torch[:q_dim]
@@ -2407,6 +2358,24 @@ class Qwen3_5MoeTextModel(Qwen3NextModel):
                     data_torch = torch.cat([q, k, v], dim=0)
                 elif name.endswith(".linear_attn.in_proj_z.weight"):
                     data_torch = self._reorder_v_heads(data_torch, 0, num_k_heads, num_v_per_k, head_v_dim)
+                elif name.endswith(".linear_attn.in_proj_ba.weight"):
+                    # Split combined in_proj_ba into separate B and A tensors.
+                    # in_proj_ba has shape [2 * num_value_heads, hidden_size];
+                    # B = [:num_value_heads], A = [num_value_heads:]
+                    half = num_v_heads
+                    b = data_torch[:half].contiguous()
+                    a = data_torch[half:].contiguous()
+                    # Each is [num_value_heads, hidden_size]; transpose to [hidden_size, num_value_heads]
+                    b_t = b.permute(1, 0).contiguous()
+                    a_t = a.permute(1, 0).contiguous()
+                    # Yield directly so super() doesn't get called
+                    base = name[:-len(".weight")]
+                    # Replace 'in_proj_ba' with 'in_proj_b'/'in_proj_a' in the name
+                    mapped_b = self.map_tensor_name(base.replace("in_proj_ba", "in_proj_b") + ".weight")
+                    mapped_a = self.map_tensor_name(base.replace("in_proj_ba", "in_proj_a") + ".weight")
+                    yield (mapped_b, b_t)
+                    yield (mapped_a, a_t)
+                    return
                 elif name.endswith(".linear_attn.in_proj_b.weight") or name.endswith(".linear_attn.in_proj_a.weight"):
                     data_torch = self._reorder_v_heads(data_torch, 0, num_k_heads, num_v_per_k, 1)
                 elif name.endswith(".linear_attn.A_log") or name.endswith(".linear_attn.dt_bias"):
@@ -2423,6 +2392,325 @@ class Qwen3_5MoeTextModel(Qwen3NextModel):
                     v_part = data[qk_channels:]
                     v_part = self._reorder_v_heads(v_part, 0, num_k_heads, num_v_per_k, head_v_dim)
                     data_torch = torch.cat([qk_part, v_part], dim=0)
+                    # GGUF reverses numpy shapes, so transpose to get correct conv shape in GGUF
+                    data_torch = data_torch.T
+                elif name.endswith(".linear_attn.out_proj.weight"):
+                    data_torch = self._reorder_v_heads(data_torch, 1, num_k_heads, num_v_per_k, head_v_dim)
+
+            # Numeric transforms (order matters: reorder first, then these).
+            if name.endswith(".A_log"):
+                data_torch = -torch.exp(data_torch)
+            elif name.endswith(".dt_bias"):
+                name = name.rpartition(".dt_bias")[0] + ".dt_proj.bias"
+            elif name.endswith(".conv1d.weight"):
+                data_torch = data_torch.squeeze()
+
+        yield from super().modify_tensors(data_torch, name, bid)
+
+    @staticmethod
+    def _reorder_v_heads(tensor: Tensor, dim: int, num_k_heads: int, num_v_per_k: int, head_dim: int) -> Tensor:
+        """Reorder V heads from grouped-by-K-head order to tiled order along `dim`.
+
+        HF stores: [G0_v0..v{r-1}, G1_v0..v{r-1}, ...]  where r = num_v_per_k
+        ggml wants: [G0_v0, G1_v0, ..., G0_v1, G1_v1, ...]
+        See upstream llama.cpp PR 19468 / _LinearAttentionVReorderBase.
+        """
+        shape = list(tensor.shape)
+        if dim < 0:
+            dim += len(shape)
+        new_shape = shape[:dim] + [num_k_heads, num_v_per_k, head_dim] + shape[dim + 1:]
+        tensor = tensor.reshape(*new_shape)
+        perm = list(range(len(new_shape)))
+        perm[dim], perm[dim + 1] = perm[dim + 1], perm[dim]
+        return tensor.permute(*perm).contiguous().reshape(*shape)
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+
+        # Only write rope_theta if the base class didn't already (i.e. it's not
+        # at the top level of hparams). For qwen3.5/qwen3.6, rope_theta lives in
+        # rope_parameters inside text_config, which load_hparams() flattens as a
+        # single dict entry -- so it's NOT at the top level and the base class
+        # misses it.  The Qwen3_5MoeTextModel subclass handles those rope params
+        # itself, so we only write rope_theta here for qwen_coder where it is at
+        # the top level (base class already wrote it) or in rope_parameters for
+        # plain Qwen3Next where no subclass overrides.
+        if "rope_theta" not in self.hparams:
+            rope_params = self.hparams.get("rope_parameters") or {}
+            if (rope_theta := rope_params.get("rope_theta")) is not None:
+                self.gguf_writer.add_rope_freq_base(rope_theta)
+            partial = rope_params.get("partial_rotary_factor")
+            if partial is not None:
+                head_dim = self.hparams.get(
+                    "head_dim",
+                    self.hparams["hidden_size"] // self.hparams["num_attention_heads"],
+                )
+                self.gguf_writer.add_rope_dimension_count(int(head_dim * partial))
+            if (mrope := rope_params.get("mrope_section", self.hparams.get("mrope_section"))) is not None:
+                mrope = list(mrope)
+                while len(mrope) < 4:
+                    mrope.append(0)
+                self.gguf_writer.add_rope_dimension_sections(mrope[:4])
+
+        if (full_attn := self.hparams.get("full_attention_interval")) is not None:
+            self.gguf_writer.add_full_attention_interval(full_attn)
+
+        # Gated DeltaNet (linear-attention) hparams
+        if (conv_kernel := self.hparams.get("linear_conv_kernel_dim")) is not None:
+            self.gguf_writer.add_ssm_conv_kernel(conv_kernel)
+        if (state_size := self.hparams.get("linear_key_head_dim")) is not None:
+            self.gguf_writer.add_ssm_state_size(state_size)
+        if (n_k_heads := self.hparams.get("linear_num_key_heads")) is not None:
+            self.gguf_writer.add_ssm_group_count(n_k_heads)
+        if (n_v_heads := self.hparams.get("linear_num_value_heads")) is not None:
+            self.gguf_writer.add_ssm_time_step_rank(n_v_heads)
+            if (v_head_dim := self.hparams.get("linear_value_head_dim")) is not None:
+                self.gguf_writer.add_ssm_inner_size(v_head_dim * n_v_heads)
+
+
+@Model.register(
+    "Qwen3_5ForConditionalGeneration",
+    "Qwen3_5ForCausalLM",
+)
+class Qwen3_5TextModel(Qwen2Model):
+    model_arch = gguf.MODEL_ARCH.QWEN35
+
+    def modify_tensors(
+        self, data_torch: Tensor, name: str, bid: int | None
+    ) -> Iterable[tuple[str, Tensor]]:
+        stripped = self._strip_vlm_prefixes(name)
+        if stripped is None:
+            return []
+        name = stripped
+        if name.startswith("mtp."):
+            return []
+
+        # Qwen3-Next / Qwen3.5 / Qwen3.6 store RMS-norm weights as
+        # (actual_scale - 1), so the typical learned scale near 1.0 is
+        # represented near 0.0 on disk. Add 1 back at convert time.
+        if name.endswith("norm.weight") and not name.endswith("linear_attn.norm.weight"):
+            data_torch = data_torch + 1
+
+        if ".linear_attn." in name:
+            num_k_heads = self.hparams.get("linear_num_key_heads", 0)
+            num_v_heads = self.hparams.get("linear_num_value_heads", 0)
+            if num_k_heads > 0 and num_v_heads > 0 and num_k_heads != num_v_heads:
+                head_k_dim = self.hparams["linear_key_head_dim"]
+                head_v_dim = self.hparams["linear_value_head_dim"]
+                num_v_per_k = num_v_heads // num_k_heads
+                if name.endswith(".linear_attn.A_log") or name.endswith(".linear_attn.dt_bias"):
+                    if data_torch.ndim == 1:
+                        data_torch = self._reorder_v_heads(
+                            data_torch.unsqueeze(-1), 0, num_k_heads, num_v_per_k, 1
+                        ).squeeze(-1)
+                    else:
+                        data_torch = self._reorder_v_heads(data_torch, -1, num_k_heads, num_v_per_k, 1)
+                elif name.endswith(".linear_attn.conv1d.weight"):
+                    data = data_torch.squeeze()
+                    qk_channels = head_k_dim * num_k_heads * 2
+                    v_part = data[qk_channels:]
+                    v_part = self._reorder_v_heads(v_part, 0, num_k_heads, num_v_per_k, head_v_dim)
+                    data_torch = torch.cat([data[:qk_channels], v_part], dim=0)
+                    # GGUF reverses numpy shapes, so transpose to get correct conv shape in GGUF
+                    data_torch = data_torch.T
+            if name.endswith(".A_log"):
+                data_torch = -torch.exp(data_torch)
+            elif name.endswith(".dt_bias"):
+                name = name.rpartition(".dt_bias")[0] + ".dt_proj.bias"
+            elif name.endswith(".conv1d.weight"):
+                data_torch = data_torch.squeeze()
+
+        yield from super().modify_tensors(data_torch, name, bid)
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+
+        # Qwen3.5/3.6 nest rope params inside a "rope_parameters" dict; the
+        # top-level rope_theta lookup in the base class misses them.
+        rope_params = self.hparams.get("rope_parameters") or {}
+        if (rope_theta := rope_params.get("rope_theta", self.hparams.get("rope_theta"))) is not None:
+            self.gguf_writer.add_rope_freq_base(rope_theta)
+
+        partial = rope_params.get(
+            "partial_rotary_factor",
+            self.hparams.get("partial_rotary_factor", 1.0),
+        )
+        head_dim = self.hparams.get(
+            "head_dim",
+            self.hparams["hidden_size"] // self.hparams["num_attention_heads"],
+        )
+        self.gguf_writer.add_rope_dimension_count(int(head_dim * partial))
+
+        if (mrope_section := rope_params.get("mrope_section")) is not None:
+            mrope_section = list(mrope_section)
+            while len(mrope_section) < 4:
+                mrope_section.append(0)
+            self.gguf_writer.add_rope_dimension_sections(mrope_section[:4])
+
+        if (full_attn := self.hparams.get("full_attention_interval")) is not None:
+            self.gguf_writer.add_full_attention_interval(full_attn)
+
+        # Gated DeltaNet (linear-attention) hparams
+        if (conv_kernel := self.hparams.get("linear_conv_kernel_dim")) is not None:
+            self.gguf_writer.add_ssm_conv_kernel(conv_kernel)
+        if (state_size := self.hparams.get("linear_key_head_dim")) is not None:
+            self.gguf_writer.add_ssm_state_size(state_size)
+        if (n_k_heads := self.hparams.get("linear_num_key_heads")) is not None:
+            self.gguf_writer.add_ssm_group_count(n_k_heads)
+        if (n_v_heads := self.hparams.get("linear_num_value_heads")) is not None:
+            self.gguf_writer.add_ssm_time_step_rank(n_v_heads)
+            if (v_head_dim := self.hparams.get("linear_value_head_dim")) is not None:
+                self.gguf_writer.add_ssm_inner_size(v_head_dim * n_v_heads)
+
+    def prepare_tensors(self):
+        # Fix: for Qwen3.5, post_attention_layernorm should map to ATTN_POST_NORM
+        # (the base tensor_force gives it to FFN_NORM due to enum ordering).
+        for bid in range(self.block_count):
+            key = f"model.layers.{bid}.post_attention_layernorm"
+            if key in self.tensor_map.mapping:
+                self.tensor_map.mapping[key] = (
+                    gguf.MODEL_TENSOR.ATTN_POST_NORM,
+                    f"blk.{bid}.post_attention_norm",
+                )
+        super().prepare_tensors()
+
+    @staticmethod
+    def _reorder_v_heads(tensor: Tensor, dim: int, num_k_heads: int, num_v_per_k: int, head_dim: int) -> Tensor:
+        """Reorder V heads from grouped-by-K-head order to tiled order along `dim`."""
+        shape = list(tensor.shape)
+        if dim < 0:
+            dim += len(shape)
+        new_shape = shape[:dim] + [num_k_heads, num_v_per_k, head_dim] + shape[dim + 1:]
+        tensor = tensor.reshape(*new_shape)
+        perm = list(range(len(new_shape)))
+        perm[dim], perm[dim + 1] = perm[dim + 1], perm[dim]
+        return tensor.permute(*perm).contiguous().reshape(*shape)
+
+
+@Model.register(
+    "Qwen3_5MoeForConditionalGeneration",
+    "Qwen3_5MoeForCausalLM",
+)
+class Qwen3_5MoeTextModel(Qwen3NextModel):
+    model_arch = gguf.MODEL_ARCH.QWEN35MOE
+
+    @staticmethod
+    def _reorder_v_heads(tensor: Tensor, dim: int, num_k_heads: int, num_v_per_k: int, head_dim: int) -> Tensor:
+        """Reorder V heads from grouped-by-K-head order to tiled order along `dim`.
+
+        HF stores: [G0_v0..v{r-1}, G1_v0..v{r-1}, ...]  where r = num_v_per_k
+        ggml wants: [G0_v0, G1_v0, ..., G0_v1, G1_v1, ...]
+        See upstream llama.cpp PR 19468 / _LinearAttentionVReorderBase.
+        """
+        shape = list(tensor.shape)
+        if dim < 0:
+            dim += len(shape)
+        new_shape = shape[:dim] + [num_k_heads, num_v_per_k, head_dim] + shape[dim + 1:]
+        tensor = tensor.reshape(*new_shape)
+        perm = list(range(len(new_shape)))
+        perm[dim], perm[dim + 1] = perm[dim + 1], perm[dim]
+        return tensor.permute(*perm).contiguous().reshape(*shape)
+
+    def set_gguf_parameters(self):
+        # rope_theta, partial_rotary_factor, mrope_section, and SSM hparams are
+        # written by the Qwen3NextModel base class -- only override what's unique.
+        if (full_attn := self.hparams.get("full_attention_interval")) is not None:
+            self.gguf_writer.add_full_attention_interval(full_attn)
+
+    def modify_tensors(
+        self, data_torch: Tensor, name: str, bid: int | None
+    ) -> Iterable[tuple[str, Tensor]]:
+        stripped = self._strip_vlm_prefixes(name)
+        if stripped is None:
+            return []
+        name = stripped
+        if name.startswith("mtp."):
+            return []
+
+        # Qwen3-Next / Qwen3.5 / Qwen3.6 store RMS-norm weights as
+        # (actual_scale - 1), so the typical learned scale near 1.0 is
+        # represented near 0.0 on disk. Add 1 back at convert time;
+        # without this every norm runs at near-zero scale, activations
+        # collapse, softmax goes near-uniform, and decode produces the
+        # mode-shifting peaked-but-wrong gibberish we observed. Excludes
+        # linear_attn.norm.weight which uses the standard convention.
+        # Source: upstream Qwen3NextModel.modify_tensors (convert_hf_to_gguf.py:4781).
+        if name.endswith("norm.weight") and not name.endswith("linear_attn.norm.weight"):
+            data_torch = data_torch + 1
+
+        # Linear-attention (Gated DeltaNet) tensor transforms.
+        if ".linear_attn." in name:
+            num_k_heads = self.hparams.get("linear_num_key_heads", 0)
+            num_v_heads = self.hparams.get("linear_num_value_heads", 0)
+
+            # V-head reorder: ggml binary ops broadcast V heads tiled; HF stores
+            # them grouped by K head. Without this reorder every V-space op
+            # (scan, alpha/beta gate, conv1d V channels, out_proj columns) is
+            # misaligned and decode collapses to repeated tokens.
+            # Upstream: convert_hf_to_gguf.py _LinearAttentionVReorderBase.
+            if num_k_heads > 0 and num_v_heads > 0 and num_k_heads != num_v_heads:
+                head_k_dim = self.hparams["linear_key_head_dim"]
+                head_v_dim = self.hparams["linear_value_head_dim"]
+                num_v_per_k = num_v_heads // num_k_heads
+
+                if name.endswith(".linear_attn.in_proj_qkvz.weight"):
+                    # Combined QKVZ tensor: [n_q + n_k + n_v + n_z, hidden_size]
+                    n_q = head_k_dim * num_k_heads
+                    n_k = head_k_dim * num_k_heads
+                    n_v = head_v_dim * num_v_heads
+                    n_z = data_torch.shape[1]  # hidden_size
+                    q = data_torch[:n_q]
+                    k = data_torch[n_q:n_q + n_k]
+                    v = data_torch[n_q + n_k:n_q + n_k + n_v]
+                    z = data_torch[n_q + n_k + n_z:]
+                    v = self._reorder_v_heads(v, 0, num_k_heads, num_v_per_k, head_v_dim)
+                    # Combine back and let map_tensor_name handle it as ATTN_QKV
+                    data_torch = torch.cat([q, k, v, z], dim=0)
+                elif name.endswith(".linear_attn.in_proj_qkv.weight"):
+                    q_dim = head_k_dim * num_k_heads
+                    k_dim = head_k_dim * num_k_heads
+                    q = data_torch[:q_dim]
+                    k = data_torch[q_dim:q_dim + k_dim]
+                    v = data_torch[q_dim + k_dim:]
+                    v = self._reorder_v_heads(v, 0, num_k_heads, num_v_per_k, head_v_dim)
+                    data_torch = torch.cat([q, k, v], dim=0)
+                elif name.endswith(".linear_attn.in_proj_z.weight"):
+                    data_torch = self._reorder_v_heads(data_torch, 0, num_k_heads, num_v_per_k, head_v_dim)
+                elif name.endswith(".linear_attn.in_proj_ba.weight"):
+                    # Split combined in_proj_ba into separate B and A tensors.
+                    # in_proj_ba has shape [2 * num_value_heads, hidden_size];
+                    # B = [:num_value_heads], A = [num_value_heads:]
+                    half = num_v_heads
+                    b = data_torch[:half].contiguous()
+                    a = data_torch[half:].contiguous()
+                    # Each is [num_value_heads, hidden_size]; transpose to [hidden_size, num_value_heads]
+                    b_t = b.permute(1, 0).contiguous()
+                    a_t = a.permute(1, 0).contiguous()
+                    # Yield directly so super() doesn't get called
+                    base = name[:-len(".weight")]
+                    mapped_b = self.map_tensor_name(base.replace("in_proj_ba", "in_proj_b") + ".weight")
+                    mapped_a = self.map_tensor_name(base.replace("in_proj_ba", "in_proj_a") + ".weight")
+                    yield (mapped_b, b_t)
+                    yield (mapped_a, a_t)
+                    return
+                elif name.endswith(".linear_attn.in_proj_b.weight") or name.endswith(".linear_attn.in_proj_a.weight"):
+                    data_torch = self._reorder_v_heads(data_torch, 0, num_k_heads, num_v_per_k, 1)
+                elif name.endswith(".linear_attn.A_log") or name.endswith(".linear_attn.dt_bias"):
+                    if data_torch.ndim == 1:
+                        data_torch = self._reorder_v_heads(
+                            data_torch.unsqueeze(-1), 0, num_k_heads, num_v_per_k, 1
+                        ).squeeze(-1)
+                    else:
+                        data_torch = self._reorder_v_heads(data_torch, -1, num_k_heads, num_v_per_k, 1)
+                elif name.endswith(".linear_attn.conv1d.weight"):
+                    data = data_torch.squeeze()
+                    qk_channels = head_k_dim * num_k_heads * 2
+                    qk_part = data[:qk_channels]
+                    v_part = data[qk_channels:]
+                    v_part = self._reorder_v_heads(v_part, 0, num_k_heads, num_v_per_k, head_v_dim)
+                    data_torch = torch.cat([qk_part, v_part], dim=0)
+                    # GGUF reverses numpy shapes, so transpose to get correct conv shape in GGUF
+                    data_torch = data_torch.T
                     # Remaining transforms below expect the name; fall through to
                     # the numeric/rename block so super() gets the squeezed tensor.
                 elif name.endswith(".linear_attn.out_proj.weight"):
@@ -2454,7 +2742,8 @@ class Qwen3_5MoeTextModel(Qwen3NextModel):
         if name.endswith("mlp.experts.down_proj") or name.endswith("mlp.experts.down_proj.weight"):
             if not name.endswith(".weight"):
                 name = name + ".weight"
-            return [(self.map_tensor_name(name), data_torch)]
+            yield (self.map_tensor_name(name), data_torch)
+            return
 
         if name.endswith("mlp.experts.gate_up_proj") or name.endswith("mlp.experts.gate_up_proj.weight"):
             if data_torch.ndim < 3 or data_torch.shape[-2] % 2 != 0:
@@ -2468,9 +2757,11 @@ class Qwen3_5MoeTextModel(Qwen3NextModel):
             base = base[:-len(".gate_up_proj")]
             mapped_gate = self.map_tensor_name(base + ".gate_proj.weight")
             mapped_up   = self.map_tensor_name(base + ".up_proj.weight")
-            return [(mapped_gate, gate), (mapped_up, up)]
+            yield (mapped_gate, gate)
+            yield (mapped_up, up)
+            return
 
-        return super().modify_tensors(data_torch, name, bid)
+        yield from super().modify_tensors(data_torch, name, bid)
 
     def tensor_force_quant(self, name, new_name, bid, n_dims):
         # Packed MoE expert tensors ship without the ".weight" suffix (e.g.
@@ -2489,6 +2780,15 @@ class Qwen3_5MoeTextModel(Qwen3NextModel):
             gguf.MODEL_TENSOR.SSM_CONV1D, bid, ".weight" if name.endswith(".weight") else ""
         ):
             return gguf.GGMLQuantizationType.F32
+        # Embeddings and output layers must be F16 for llama.cpp compatibility.
+        # The converter may quantize them to Q6_0 (dtype 133) based on --outtype,
+        # but llama.cpp only accepts tensor types in [0, 42). Q6_0 is outside
+        # this range and causes "invalid ggml type 133" at model load time.
+        if bid is None and (
+            new_name == "token_embd.weight"
+            or new_name == "output.weight"
+        ):
+            return gguf.GGMLQuantizationType.F16
         return super().tensor_force_quant(name, new_name, bid, n_dims)
 
 
