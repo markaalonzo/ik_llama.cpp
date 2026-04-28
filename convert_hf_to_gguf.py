@@ -2336,18 +2336,33 @@ class Qwen3NextModel(Qwen2MoeModel):
                 num_v_per_k = num_v_heads // num_k_heads
 
                 if name.endswith(".linear_attn.in_proj_qkvz.weight"):
-                    # Combined QKVZ tensor: [n_q + n_k + n_v + n_z, hidden_size]
-                    n_q = head_k_dim * num_k_heads
-                    n_k = head_k_dim * num_k_heads
-                    n_v = head_v_dim * num_v_heads
-                    n_z = data_torch.shape[1]  # hidden_size
-                    q = data_torch[:n_q]
-                    k = data_torch[n_q:n_q + n_k]
-                    v = data_torch[n_q + n_k:n_q + n_k + n_v]
-                    z = data_torch[n_q + n_k + n_z:]
+                    # HF stores QKVZ rows grouped per-K-head:
+                    #   [G0_q, G0_k, G0_v, G0_z, G1_q, G1_k, G1_v, G1_z, ...]
+                    # The previous flat-block slicing ([Q;K;V;Z]) was wrong, and
+                    # additionally the n_z slice was sized as hidden (typo).
+                    # Use the per-K-head split helper (matches upstream
+                    # llama.cpp convert_hf_to_gguf.py:4788-4816) and yield Q/K/V
+                    # combined as ATTN_QKV plus Z separately as ATTN_GATE.
+                    from gguf.qwen3next_split import split_qkvz
+                    q_np, k_np, v_np, z_np = split_qkvz(
+                        data_torch.cpu().numpy(),
+                        num_k_heads=num_k_heads,
+                        head_k_dim=head_k_dim,
+                        num_v_heads=num_v_heads,
+                        head_v_dim=head_v_dim,
+                    )
+                    q = torch.from_numpy(q_np)
+                    k = torch.from_numpy(k_np)
+                    v = torch.from_numpy(v_np)
+                    z = torch.from_numpy(z_np)
                     v = self._reorder_v_heads(v, 0, num_k_heads, num_v_per_k, head_v_dim)
-                    # Combine back and let map_tensor_name handle it as ATTN_QKV
-                    data_torch = torch.cat([q, k, v, z], dim=0)
+                    z = self._reorder_v_heads(z, 0, num_k_heads, num_v_per_k, head_v_dim)
+                    base_qkvz = name[:-len(".weight")]
+                    z_base = base_qkvz.replace("in_proj_qkvz", "in_proj_z")
+                    qkv = torch.cat([q, k, v], dim=0).contiguous()
+                    yield (self.map_tensor_name(name), qkv)
+                    yield (self.map_tensor_name(z_base + ".weight"), z.contiguous())
+                    return
                 elif name.endswith(".linear_attn.in_proj_qkv.weight"):
                     q_dim = head_k_dim * num_k_heads
                     k_dim = head_k_dim * num_k_heads
@@ -2654,18 +2669,33 @@ class Qwen3_5MoeTextModel(Qwen3NextModel):
                 num_v_per_k = num_v_heads // num_k_heads
 
                 if name.endswith(".linear_attn.in_proj_qkvz.weight"):
-                    # Combined QKVZ tensor: [n_q + n_k + n_v + n_z, hidden_size]
-                    n_q = head_k_dim * num_k_heads
-                    n_k = head_k_dim * num_k_heads
-                    n_v = head_v_dim * num_v_heads
-                    n_z = data_torch.shape[1]  # hidden_size
-                    q = data_torch[:n_q]
-                    k = data_torch[n_q:n_q + n_k]
-                    v = data_torch[n_q + n_k:n_q + n_k + n_v]
-                    z = data_torch[n_q + n_k + n_z:]
+                    # HF stores QKVZ rows grouped per-K-head:
+                    #   [G0_q, G0_k, G0_v, G0_z, G1_q, G1_k, G1_v, G1_z, ...]
+                    # The previous flat-block slicing ([Q;K;V;Z]) was wrong, and
+                    # additionally the n_z slice was sized as hidden (typo).
+                    # Use the per-K-head split helper (matches upstream
+                    # llama.cpp convert_hf_to_gguf.py:4788-4816) and yield Q/K/V
+                    # combined as ATTN_QKV plus Z separately as ATTN_GATE.
+                    from gguf.qwen3next_split import split_qkvz
+                    q_np, k_np, v_np, z_np = split_qkvz(
+                        data_torch.cpu().numpy(),
+                        num_k_heads=num_k_heads,
+                        head_k_dim=head_k_dim,
+                        num_v_heads=num_v_heads,
+                        head_v_dim=head_v_dim,
+                    )
+                    q = torch.from_numpy(q_np)
+                    k = torch.from_numpy(k_np)
+                    v = torch.from_numpy(v_np)
+                    z = torch.from_numpy(z_np)
                     v = self._reorder_v_heads(v, 0, num_k_heads, num_v_per_k, head_v_dim)
-                    # Combine back and let map_tensor_name handle it as ATTN_QKV
-                    data_torch = torch.cat([q, k, v, z], dim=0)
+                    z = self._reorder_v_heads(z, 0, num_k_heads, num_v_per_k, head_v_dim)
+                    base_qkvz = name[:-len(".weight")]
+                    z_base = base_qkvz.replace("in_proj_qkvz", "in_proj_z")
+                    qkv = torch.cat([q, k, v], dim=0).contiguous()
+                    yield (self.map_tensor_name(name), qkv)
+                    yield (self.map_tensor_name(z_base + ".weight"), z.contiguous())
+                    return
                 elif name.endswith(".linear_attn.in_proj_qkv.weight"):
                     q_dim = head_k_dim * num_k_heads
                     k_dim = head_k_dim * num_k_heads
