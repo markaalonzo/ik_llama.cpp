@@ -314,6 +314,7 @@ class MODEL_TENSOR(IntEnum):
     SSM_OUT              = auto()
     SSM_NORM             = auto()  # qwen3.5/qwen3.6 linear_attn RMS norm
     SSM_BETA             = auto()  # qwen3.5/qwen3.6 in_proj_b gate
+    SSM_BETA_ALPHA       = auto()  # qwen3-next combined in_proj_ba gate
     SSM_ALPHA            = auto()  # qwen3.5/qwen3.6 in_proj_a gate
     ATTN_GATE            = auto()  # qwen3-next/qwen3.5 linear_attn z-gate (in_proj_z)
     ATTN_Q_A             = auto()
@@ -471,6 +472,7 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.SSM_OUT:              "blk.{bid}.ssm_out",
     MODEL_TENSOR.SSM_NORM:             "blk.{bid}.ssm_norm",
     MODEL_TENSOR.SSM_BETA:             "blk.{bid}.ssm_beta",
+    MODEL_TENSOR.SSM_BETA_ALPHA:       "blk.{bid}.ssm_ba",
     MODEL_TENSOR.SSM_ALPHA:            "blk.{bid}.ssm_alpha",
     MODEL_TENSOR.ATTN_GATE:            "blk.{bid}.attn_gate",
     MODEL_TENSOR.ATTN_Q_A:             "blk.{bid}.attn_q_a",
@@ -910,6 +912,7 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.SSM_NORM,
         MODEL_TENSOR.SSM_OUT,
         MODEL_TENSOR.SSM_BETA,
+        MODEL_TENSOR.SSM_BETA_ALPHA,
         MODEL_TENSOR.SSM_ALPHA,
         MODEL_TENSOR.FFN_NORM,
         MODEL_TENSOR.FFN_GATE_INP,
