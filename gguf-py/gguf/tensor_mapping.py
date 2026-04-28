@@ -128,7 +128,7 @@ class TensorNameMap:
             "transformer.blocks.{bid}.norm_attn_norm.attn.Wqkv",                   # dbrx
             "transformer.h.{bid}.self_attention.query_key_value",                  # falcon
             "model.layers.{bid}.linear_attn.in_proj_qkv",                          # qwen3.5 / qwen3.6 linear_attn QKV
-            "model.layers.{bid}.linear_attn.in_proj_qkvz",                         # qwen3-next linear_attn QKVZ
+            "model.layers.{bid}.linear_attn.in_proj_qkvz",                         # qwen3-next linear_attn QKVZ (Z split off into ATTN_GATE in modify_tensors)
             "h.{bid}.self_attention.query_key_value",                              # bloom
             "language_model.encoder.layers.{bid}.self_attention.query_key_value",  # persimmon
             "model.layers.{bid}.self_attn.query_key_value",                        # persimmon
