@@ -2401,8 +2401,6 @@ class Qwen3NextModel(Qwen2MoeModel):
                     v_part = data[qk_channels:]
                     v_part = self._reorder_v_heads(v_part, 0, num_k_heads, num_v_per_k, head_v_dim)
                     data_torch = torch.cat([qk_part, v_part], dim=0)
-                    # GGUF reverses numpy shapes, so transpose to get correct conv shape in GGUF
-                    data_torch = data_torch.T
                 elif name.endswith(".linear_attn.out_proj.weight"):
                     data_torch = self._reorder_v_heads(data_torch, 1, num_k_heads, num_v_per_k, head_v_dim)
 
@@ -2520,8 +2518,6 @@ class Qwen3_5TextModel(Qwen2Model):
                     v_part = data[qk_channels:]
                     v_part = self._reorder_v_heads(v_part, 0, num_k_heads, num_v_per_k, head_v_dim)
                     data_torch = torch.cat([data[:qk_channels], v_part], dim=0)
-                    # GGUF reverses numpy shapes, so transpose to get correct conv shape in GGUF
-                    data_torch = data_torch.T
             if name.endswith(".A_log"):
                 data_torch = -torch.exp(data_torch)
             elif name.endswith(".dt_bias"):
