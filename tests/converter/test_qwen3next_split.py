@@ -271,9 +271,15 @@ class QuantsSubnormalGuardTests(unittest.TestCase):
 
         # Output must be uint8 bytes, no NaN possible by dtype, but verify shape
         self.assertEqual(out.dtype, np.uint8)
-        # Re-verify: dequantize and ensure no inf/NaN propagated
+        # Re-verify: dequantize and ensure no inf/NaN propagated. Skip qtypes
+        # that don't ship a Python dequantize_blocks (Q6_0 is pre-existing
+        # quantize-only); the quantize-without-overflow assertion above is
+        # already what the fix guarantees.
         from gguf.quants import dequantize
-        deq = dequantize(out, qtype)
+        try:
+            deq = dequantize(out, qtype)
+        except NotImplementedError:
+            return
         self.assertFalse(np.any(np.isnan(deq)), f"{qtype_name}: NaN leaked into dequantized output")
         self.assertFalse(np.any(np.isinf(deq)), f"{qtype_name}: Inf leaked into dequantized output")
 
