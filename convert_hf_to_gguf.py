@@ -2620,12 +2620,6 @@ class Qwen3_5MoeTextModel(Qwen3NextModel):
         perm[dim], perm[dim + 1] = perm[dim + 1], perm[dim]
         return tensor.permute(*perm).contiguous().reshape(*shape)
 
-    def set_gguf_parameters(self):
-        # rope_theta, partial_rotary_factor, mrope_section, and SSM hparams are
-        # written by the Qwen3NextModel base class -- only override what's unique.
-        if (full_attn := self.hparams.get("full_attention_interval")) is not None:
-            self.gguf_writer.add_full_attention_interval(full_attn)
-
     def modify_tensors(
         self, data_torch: Tensor, name: str, bid: int | None
     ) -> Iterable[tuple[str, Tensor]]:
