@@ -466,6 +466,10 @@ class TensorNameMap:
             "model.layers.{bid}.linear_attn.in_proj_b",  # qwen3.5 / qwen3.6
         ),
 
+        MODEL_TENSOR.SSM_BETA_ALPHA: (
+            "model.layers.{bid}.linear_attn.in_proj_ba",  # qwen3-next
+        ),
+
         MODEL_TENSOR.SSM_ALPHA: (
             "model.layers.{bid}.linear_attn.in_proj_a",  # qwen3.5 / qwen3.6
         ),

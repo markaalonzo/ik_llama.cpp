@@ -2374,22 +2374,12 @@ class Qwen3NextModel(Qwen2MoeModel):
                 elif name.endswith(".linear_attn.in_proj_z.weight"):
                     data_torch = self._reorder_v_heads(data_torch, 0, num_k_heads, num_v_per_k, head_v_dim)
                 elif name.endswith(".linear_attn.in_proj_ba.weight"):
-                    # Split combined in_proj_ba into separate B and A tensors.
-                    # in_proj_ba has shape [2 * num_value_heads, hidden_size];
-                    # B = [:num_value_heads], A = [num_value_heads:]
-                    half = num_v_heads
-                    b = data_torch[:half].contiguous()
-                    a = data_torch[half:].contiguous()
-                    # Each is [num_value_heads, hidden_size]; transpose to [hidden_size, num_value_heads]
-                    b_t = b.permute(1, 0).contiguous()
-                    a_t = a.permute(1, 0).contiguous()
-                    # Yield directly so super() doesn't get called
-                    base = name[:-len(".weight")]
-                    # Replace 'in_proj_ba' with 'in_proj_b'/'in_proj_a' in the name
-                    mapped_b = self.map_tensor_name(base.replace("in_proj_ba", "in_proj_b") + ".weight")
-                    mapped_a = self.map_tensor_name(base.replace("in_proj_ba", "in_proj_a") + ".weight")
-                    yield (mapped_b, b_t)
-                    yield (mapped_a, a_t)
+                    # Keep BA combined as a single SSM_BETA_ALPHA tensor per
+                    # upstream tensor_mapping.py:864-866. Previous code split it
+                    # into separate b_t/a_t with permutes — that worked only by
+                    # accident because num_v_heads happens to match the
+                    # transposed dim, and it diverges from upstream's contract.
+                    yield from super().modify_tensors(data_torch, name, bid)
                     return
                 elif name.endswith(".linear_attn.in_proj_b.weight") or name.endswith(".linear_attn.in_proj_a.weight"):
                     data_torch = self._reorder_v_heads(data_torch, 0, num_k_heads, num_v_per_k, 1)
