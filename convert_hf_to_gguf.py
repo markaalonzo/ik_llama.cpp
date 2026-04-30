@@ -2619,6 +2619,9 @@ class Qwen3_5MoeTextModel(Qwen3NextModel):
     def modify_tensors(
         self, data_torch: Tensor, name: str, bid: int | None
     ) -> Iterable[tuple[str, Tensor]]:
+        # VLM-prefix strip and MTP early-out: short-circuit before the packed
+        # MoE-experts handler below. Qwen3NextModel.modify_tensors performs the
+        # same checks, so this is purely an optimization.
         stripped = self._strip_vlm_prefixes(name)
         if stripped is None:
             return []
